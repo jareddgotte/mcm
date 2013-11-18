@@ -1,0 +1,85 @@
+#list-control {
+	margin: 10px -15px;
+}
+#list-tabs {
+	margin-left: -2px;
+}
+.tab-pane {
+	overflow: hidden;
+}
+.tab-pane .posters {
+	margin: 0 -5px;
+}
+.tab-pane img {
+	/* Width and height change here depending on the dimensions of graphic we want to use as our movie poster */
+	/* [disabled]wwidth: 92px; */
+	/* [disabled]hheight: 138px; */
+	width: 164px;
+	height: 241px;
+	margin: 5px;
+	float: left;
+	cursor: pointer;
+}
+#dialog #imdb-icon {
+	margin: 0 auto
+}
+#dialog .trailer-scale {
+	width: 100%
+}
+#dialog #accordion, #dialog .alert {
+	margin: 10px 0;
+}
+#dialog #accordion .panel-body {
+	position: relative;
+	padding: 0;
+}
+#dialog #accordion .panel-body iframe {
+	position: absolute;
+	top: 0;
+	left: 0;
+	padding: 15px;
+}
+#dialog #overview-content {
+	display: none;
+	margin-top: 10px;
+	margin-bottom: 0;
+}
+#dialog .modal-footer {
+	margin-top: 0
+}
+#list-control .col-xs-6:nth-child(odd) { padding-right: 5px }
+#list-control .col-xs-6:nth-child(even) { padding-left: 5px }
+#list-control .col-xs-12 { padding-bottom: 10px }
+@media (min-width: 768px) {
+	#list-control .col-xs-6:nth-child(odd) { padding-right: 15px }
+	#list-control .col-xs-6:nth-child(even) { padding-left: 15px }
+	#list-control .col-xs-12 { padding-bottom: 0 }
+	.tab-pane .posters {
+		margin: 0 -4px;
+	}
+	.tab-pane img {
+		width: 174px;
+		height: 256px;
+		margin: 4px;
+	}
+}
+@media (min-width: 992px) {
+	.tab-pane .posters {
+		margin: 0 -5px;
+	}
+	.tab-pane img {
+		width: 180px;
+		height: 265px;
+		margin: 5px;
+	}
+}
+@media (min-width: 1200px) {
+	.tab-pane .posters {
+		margin: 0 -6px;
+	}
+	.tab-pane img {
+		/*width: 180px;
+		height: 265px;*/
+		margin: 6px;
+	}
+}

@@ -1,15 +1,11 @@
 <?php
-	require_once('inc/config.php');
-	require_once('inc/TMDb.inc'); // https://github.com/glamorous/TMDb-PHP-API
-	session_start();
 
-	
-	if (!isset($_SESSION['tmdb_obj'])) {
-		$_SESSION['tmdb_obj'] = new TMDb(TMDB_API_KEY);
-	}
+require_once("inc/php-login.php");
 
-	$_SESSION['token'] = $_SESSION['tmdb_obj']->getAuthToken();
-	
-	header("Location: " . $_SESSION['token']['Authentication-Callback']);
-	
-?>
+$login = new Login();
+
+if ($login->isUserLoggedIn() === true) {
+	include("inc/views/logged_in.php");
+} else {
+	include("inc/views/login.php");
+}
