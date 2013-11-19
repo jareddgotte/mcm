@@ -4,6 +4,14 @@
 #list-tabs {
 	margin-left: -2px;
 }
+#list-tabs .ui-sortable-placeholder {
+	visibility: visible !important;
+	border-radius: 4px;
+	background: #f8f8f8;
+}
+#main-alerts .alert {
+	margin: 10px 0;
+}
 .tab-pane {
 	overflow: hidden;
 }
@@ -12,12 +20,14 @@
 }
 .tab-pane img {
 	/* Width and height change here depending on the dimensions of graphic we want to use as our movie poster */
-	/* [disabled]wwidth: 92px; */
-	/* [disabled]hheight: 138px; */
-	width: 164px;
-	height: 241px;
+	/*width: 92px;
+	height: 138px;*/
+	/*width: 164px;
+	height: 241px;*/
+	width: 195px;
+	height: 288px;
 	margin: 5px;
-	float: left;
+	/*float: left;*/
 	cursor: pointer;
 }
 #dialog #imdb-icon {
@@ -61,6 +71,7 @@
 		width: 174px;
 		height: 256px;
 		margin: 4px;
+		float: left;
 	}
 }
 @media (min-width: 992px) {

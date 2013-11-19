@@ -1,41 +1,48 @@
 <?php
 
 require_once('inc/php-login.php');
-session_start();
+//session_start();
+$errors = array();
 
 // Kill the script if someone got here improperly
-if (!isset($_POST['from_list']) || !isset($_POST['to_list']) || !isset($_POST['movie_id'])) {
-	//printf("Not all values required POSTed: from_list[%s] to_list[%s] movie_id[%s] ", $_POST['from_list'], $_POST['to_list'], $_POST['movie_id']);
-	echo "Not all values required POSTed.";
-	exit();
+$from_list = (isset($_POST['from_list'])) ? $_POST['from_list'] : ((isset($_GET['from_list'])) ? $_GET['from_list'] : '');
+$to_list = (isset($_POST['to_list'])) ? $_POST['to_list'] : ((isset($_GET['to_list'])) ? $_GET['to_list'] : '');
+$movie_id = (isset($_POST['movie_id'])) ? $_POST['movie_id'] : ((isset($_GET['movie_id'])) ? $_GET['movie_id'] : '');
+
+if ($from_list === '') { echo 'Error: No from list id given.'; exit(); }
+if ($to_list === '') { echo 'Error: No to list id given.'; exit(); }
+if ($movie_id === '') { echo 'Error: No movie id given.'; exit(); }
+
+//printf("f[%s] t[%s] m[%s]\n", $from_list, $to_list, $movie_id);
+//echo "trying to connect to db<br>\n";
+try {
+	$db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
+} catch (PDOException $e) {
+	$db_connection = false;
+	$errors[] = 'Database error' . $e->getMessage();
 }
 
-// This function removes a movie from a list and adds it to another within the TMDb database
-function moveMovie ($from_list, $to_list, $movie_id) {
-	// Remove from list
-	$fcheck = $_SESSION['tmdb_obj']->checkItemInList($from_list, (int) $movie_id);
-	if ($fcheck['item_present']) {
-		$remove_response = $_SESSION['tmdb_obj']->removeItemFromList($from_list, (int) $movie_id, TMDB_SESSION_ID);
-		//var_dump($remove_response);
-		// $remove_response['status_code'] == 12 means success
-	}
-	else {
-		// error: report movie is not on the list I'm removing it from
-		printf("Movie ID [%s] is not on the list I'm removing it from [%s]", $movie_id, $from_list);
-	}
-	
-	// Add to list
-	$tcheck = $_SESSION['tmdb_obj']->checkItemInList($to_list, (int) $movie_id);
-	if (!$tcheck['item_present']) {
-		$add_response = $_SESSION['tmdb_obj']->addItemToList($to_list, (int) $movie_id, TMDB_SESSION_ID);
-		//var_dump($add_response);
-		// $add_response['status_code'] == 12 means success
-	}
-	else {
-		// error: report movie is already on the list I'm putting it to
-		printf("Movie ID [%s] is already on the list I'm putting it to [%s]", $movie_id, $to_list);
-	}
-	
+//echo "selecting the movie id<br>\n";
+$query = $db_connection->prepare('SELECT id FROM movies WHERE movie_list_id = :from_list AND tmdb_movie_id = :movie_id');
+$query->bindValue(':from_list', $from_list, PDO::PARAM_INT);
+$query->bindValue(':movie_id', $movie_id, PDO::PARAM_INT);
+if ($query->execute() === FALSE) {
+	$errorInfo = $query->errorInfo();
+	$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
 }
+$rows = $query->fetchAll(PDO::FETCH_OBJ);
+if (count($rows) > 0) {
+	//echo "moving movie<br>\n";
+	$row = $rows[0];
+	//echo 'row id: ' + $row->id + "<br>\n";
+	$query = $db_connection->prepare('UPDATE movies SET movie_list_id = :to_list WHERE id = :id');
+	$query->bindValue(':to_list', $to_list, PDO::PARAM_INT);
+	$query->bindValue(':id', $row->id, PDO::PARAM_INT);
+	if ($query->execute() === FALSE) {
+		$errorInfo = $query->errorInfo();
+		$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
+	}
+}
+//echo "done<br>\n";
 
-moveMovie($_POST['from_list'], $_POST['to_list'], $_POST['movie_id']);
+if (isset($errors)) if (count($errors) > 0) var_dump($errors);

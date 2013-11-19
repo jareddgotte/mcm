@@ -2,8 +2,7 @@
 
 //$time1 = microtime(true) - $_SERVER["REQUEST_TIME_FLOAT"];
 
-require_once('inc/config/config.php');
-require_once('inc/classes/TMDb.inc'); // https://github.com/glamorous/TMDb-PHP-API
+require_once('inc/php-login.php');
 session_start();
 
 
@@ -20,7 +19,7 @@ if (!isset($_SESSION['tmdb_config'])) {
 	$_SESSION['tmdb_config'] = $_SESSION['tmdb_obj']->getConfiguration();
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
-$poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][1];
+$poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];
 
 $movie = $_SESSION['tmdb_obj']->getMovie($movie_id);
 $title = $movie['original_title'];
@@ -67,7 +66,7 @@ if (count($yt_trailers) > 0) {
 	}
 	$trailer_html .= '</div>';
 }
-else $trailer_html = '<div class="alert alert-danger"><strong>No trailer available.</strong></div>';
+else $trailer_html = '<div class="alert alert-warning"><strong>No trailer available.</strong></div>';
 
 $genress = '';
 for ($i = 0; $i < count($genres); $i++) {
@@ -126,8 +125,8 @@ echo '
 				<button class="btn btn-default pull-left" id="overview" type="button">Movie Overview</button>
 				<button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
 				<div class="btn-group dropup">
-					<button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">Move to... <span class="caret"></span></button>
-					<ul class="dropdown-menu pull-right text-left" id="move-to-lists">
+					<button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown">Options<span class="caret"></span></button>
+					<ul class="dropdown-menu pull-right text-left" id="movie-options">
 					</ul>
 				</div>
 			</div>

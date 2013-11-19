@@ -45,6 +45,7 @@
 			$nav_auth = '
 				<ul class="nav navbar-nav">
 					<li class="disabled"><a href="#create">Create List</a></li>
+					<li class="disabled"><a href="#adjust">Adjust Lists</a></li>
 				</ul>
 				<ul class="nav navbar-nav navbar-right">
 					<li class="disabled"><a href="about.php">About</a></li>

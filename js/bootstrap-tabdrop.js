@@ -78,7 +78,7 @@
 					}
 				});
 			if (collection.length > 0) {
-				$(window).trigger('tabdrop.on') // added so I can disable Sortable() on the tabs. - Jared Gotte, 11/17/2013
+				//$(window).trigger('tabdrop.on') // added so I can disable Sortable() on the tabs. - Jared Gotte, 11/17/2013
 				collection = $(collection);
 				this.dropdown
 					.find('ul')
@@ -90,7 +90,7 @@
 					this.dropdown.removeClass('active');
 				}
 			} else {
-				$(window).trigger('tabdrop.off') // added so I can enable Sortable() on the tabs - Jared Gotte, 11/17/2013
+				//$(window).trigger('tabdrop.off') // added so I can enable Sortable() on the tabs - Jared Gotte, 11/17/2013
 				this.dropdown.addClass('hide');
 			}
 		}
