@@ -6,10 +6,8 @@ $errors = array();
 
 // Kill the script if someone got here improperly
 $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
-$tmdb_movie_id = (isset($_POST['tmdb_movie_id'])) ? $_POST['tmdb_movie_id'] : ((isset($_GET['tmdb_movie_id'])) ? $_GET['tmdb_movie_id'] : '');
 
 if ($movie_list_id === '') { echo 'Error: No movie list id given.'; exit(); }
-if ($tmdb_movie_id === '') { echo 'Error: No movie id given.'; exit(); }
 
 //echo "trying to connect to db<br>\n";
 try {
@@ -19,11 +17,20 @@ try {
 	$errors[] = 'Database error' . $e->getMessage();
 }
 
-// delete movie
-//echo "deleting movie<br>\n";
-$query = $db_connection->prepare('DELETE FROM movies WHERE movie_list_id = :movie_list_id AND tmdb_movie_id = :id');
+// delete list
+//echo "deleting list<br>\n";
+$query = $db_connection->prepare('DELETE FROM movie_lists WHERE movie_list_id = :movie_list_id');
 $query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
-$query->bindValue(':id', $tmdb_movie_id, PDO::PARAM_INT);
+if ($query->execute() === FALSE) {
+	$errorInfo = $query->errorInfo();
+	$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
+}
+//echo "done<br>\n";
+
+// delete movies attached to list
+//echo "deleting movies in list<br>\n";
+$query = $db_connection->prepare('DELETE FROM movies WHERE movie_list_id = :movie_list_id');
+$query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
 if ($query->execute() === FALSE) {
 	$errorInfo = $query->errorInfo();
 	$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);

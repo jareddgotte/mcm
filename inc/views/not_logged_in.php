@@ -39,8 +39,15 @@ if ($login->messages) {
 			</div>
 		</div>
 		<div class="col-xs-12 col-sm-8">
-			<h2>Lorem Ipsum</h2>
-			<p>"Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur? Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas nulla pariatur?"</p>
+			<h2>Movie Collection Manager (MCM)</h2>
+			<p>With DVDs being so small, the novelty of owning a movie, and the ever growing number of movies today, many people have huge movie collections to showcase.  Perhaps one of these movie collectors would like to entertain a guest of theirs with a movie?  However, their movie collection size could be overwhelming for their guest to decide on a movie.  The purpose of this project is to help make movie collection browsing easier along with these features:<p>
+			<ul>
+				<li>Allowing the host to narrow down the choices of movies for the guest to choose from by "have not seen," "seen but I wouldn't mind watching again," or other filters of their choosing.</li>
+				<li>Easily moving a movie from a "have not seen" to a "have seen" list.</li>
+				<li>When clicking on a movie in the collection, being shown a movie summary and trailer(s) with ease.</li>
+				<li>Being able to access 100% of the website's features from any device with an HTML5 browser!</li>
+				<li>With more features in the works!</li>
+			</ul>
 		</div>
 	</div><!-- /.row -->
 

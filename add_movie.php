@@ -76,13 +76,15 @@ else {
 }
 // check if movie is already added to this list or other lists of user
 //echo "checking if movie is already added to user's lists<br>\n";
-$query = $db_connection->prepare('SELECT * FROM movies a JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id');
+$query = $db_connection->prepare('SELECT * FROM movies a JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id');
 $query->bindValue(':tmdb_movie_id', $tmdb_movie_id, PDO::PARAM_INT);
+$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
 if ($query->execute() === FALSE) {
 	$errorInfo = $query->errorInfo();
 	$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
 }
 $rows = $query->fetchAll(PDO::FETCH_OBJ);
+
 //   if it isn't, add it
 if (count($rows) === 0) {
 	//echo "it isn't so we're adding it<br>\n";
@@ -92,12 +94,16 @@ if (count($rows) === 0) {
 	if ($query->execute() === FALSE) {
 		$errorInfo = $query->errorInfo();
 		$errors[] = sprintf("Execute error: %s", $errorInfo[2]);
+		var_dump($errors);
 	}
+	echo '1'; // inserted
+	exit();
 }
+echo '2'; // dusplicate discovered
 //echo "done<br>\n";
 
 if (isset($errors)) if (count($errors) > 0) var_dump($errors);
-else {
+/*else {
 	// Update our db var
 	echo 'greatsuccess';
 	$query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
@@ -124,4 +130,6 @@ else {
 		$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 	}
 	echo json_encode($db_var);
+	
 }
+*/

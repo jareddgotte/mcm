@@ -28,9 +28,9 @@
 <body>
 
 <div class="container">
-	<nav class="navbar navbar-default" role="navigation">
+	<nav class="navbar navbar-default">
 		<div class="navbar-header">
-			<button type="button" class="navbar-toggle" data-toggle="collapse" data-target="#navbar-to-collapse">
+			<button type="button" class="navbar-toggle" data-toggle="collapse" data-target="#header-nav">
 				<span class="sr-only">Toggle navigation</span>
 				<span class="icon-bar"></span>
 				<span class="icon-bar"></span>
@@ -39,13 +39,13 @@
 			<a class="navbar-brand" href=".">Movie Collection Manager</a>
 		</div>
 		
-		<div class="collapse navbar-collapse" id="navbar-to-collapse">
+		<div class="collapse navbar-collapse" id="header-nav">
 			<?php
 			$nav_active = (isset($nav_active)) ? $nav_active : false;
 			$nav_auth = '
 				<ul class="nav navbar-nav">
-					<li class="disabled"><a href="#create">Create List</a></li>
-					<li class="disabled"><a href="#adjust">Adjust Lists</a></li>
+					<li><a href="#create">Create List</a></li>
+					<li><a href="#adjust">Adjust Lists</a></li>
 				</ul>
 				<ul class="nav navbar-nav navbar-right">
 					<li class="disabled"><a href="about.php">About</a></li>

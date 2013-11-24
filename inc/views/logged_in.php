@@ -54,8 +54,11 @@ if ($query->execute() === FALSE) {
 
 $movie_lists = array();
 while ($row = $query->fetch(PDO::FETCH_OBJ)) {
-	$movie_lists[$row->list_rank] = array($row->movie_list_id, $row->list_name, $row->list_description);
+	//printf("%s %s\n", $row->list_rank, $row->movie_list_id);
+	$movie_lists[(int)$row->list_rank] = array($row->movie_list_id, $row->list_name, $row->list_description);
 }
+ksort($movie_lists);
+//var_dump($movie_lists);
 
 // Construct our javascript db var
 $db_var = array();
@@ -114,13 +117,17 @@ console.log('" . serialize($_SESSION) . "'); // debug my session variable
 //console.log('" . ""/*count($merged)*/ . "'); // debug how many movies I have
 
 var db = " . $db_var . "
+console.log(db)
 var base_url = '" . $base_url . "'
 var poster_size_big = '" . $poster_size . "'
 var poster_size_small = '" . $_SESSION['tmdb_config']['images']['poster_sizes'][0] . "'
 
 // Variables to record whether or not we've loaded the table yet or not.  This is to prevent multiple loadings of each table if we keep going back and forth between tabs
-var currentList = db[0].list_id
-var currentListPos = listPos(currentList)
+//console.log(db.length)
+if (db.length > 0) {
+	var currentList = db[0].list_id
+	var currentListPos = listPos(currentList)
+}
 var currentSort = checkSortOrder('sort') // = 'name'
 var currentOrder = checkSortOrder('order') // = 'asc'
 ";
@@ -141,7 +148,6 @@ foreach($movie_lists as $v) {
 	$list_containers .= sprintf("<div class=\"tab-pane\" id=\"%s\"></div>\n", $v[0]);
 }
 
-
 ?>
 
 	<ul class="nav nav-pills" id="list-tabs">
@@ -154,12 +160,12 @@ foreach($movie_lists as $v) {
 		<div class="col-xs-6 col-sm-2">
 			<div class="btn-group btn-block">
 				<button type="button" class="btn btn-default btn-block dropdown-toggle" data-toggle="dropdown">View <span class="caret"></span></button>
-				<ul class="dropdown-menu btn-block pull-right" role="menu" id="sort-order">
-					<li class="dropdown-header" role="presentation">Sort by</li>
+				<ul class="dropdown-menu btn-block pull-right" id="sort-order">
+					<li class="dropdown-header">Sort by</li>
 					<li><a class="sort" href="#name" id="name">Name</a></li>
 					<li><a class="sort" href="#date" id="date">Release Date</a></li>
-					<li class="divider" role="presentation"></li>
-					<li class="dropdown-header" role="presentation">Order by</li>
+					<li class="divider"></li>
+					<li class="dropdown-header">Order by</li>
 					<li><a class="order" href="#asc" id="asc">Ascending</a></li>
 					<li><a class="order" href="#desc" id="desc">Descending</a></li>
 				</ul>
@@ -168,20 +174,22 @@ foreach($movie_lists as $v) {
 		<div class="col-xs-6 col-sm-2">
 			<div class="btn-group btn-block" id="list-options">
 				<button type="button" class="btn btn-default btn-block dropdown-toggle" data-toggle="dropdown">Options <span class="caret"></span></button>
-				<ul class="dropdown-menu btn-block pull-right" role="menu">
-					<li class="disabled"><a href="#rename">Rename List</a></li>
+				<ul class="dropdown-menu btn-block pull-right">
+					<li><a href="#rename">Rename List</a></li>
 					<li><a href="#import">Import List</a></li>
-					<li class="disabled alert-danger"><a href="#delete">Delete List</a></li>
+					<li class="alert-danger"><a href="#delete">Delete List</a></li>
 				</ul>
 			</div>
 		</div><!-- /.col-**-* -->
 	</div>
-	<div class="tab-content">
+	<div class="tab-content" id="list-containers">
 		<?php echo $list_containers; ?>
 	</div>
-	<div class="modal fade" id="dialog" tabindex="-1" role="dialog" aria-hidden="true">
+	<div class="modal fade" id="dialog" tabindex="-1" aria-hidden="true">
 	</div><!-- /.modal -->
-	<div class="modal fade" id="import-dialog" tabindex="-1" role="dialog" aria-hidden="true">
+	<div class="modal fade" id="adjust-dialog" tabindex="-1" aria-hidden="true">
+	</div><!-- /.modal -->
+	<div class="modal fade" id="import-dialog" tabindex="-1" aria-hidden="true">
 		<div class="modal-dialog">
 			<div class="modal-content">
 				<div class="modal-header">
@@ -196,6 +204,63 @@ foreach($movie_lists as $v) {
 				<div class="modal-footer">
 					<button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
 					<button type="button" class="btn btn-primary" id="import-submit">Import</button>
+				</div>
+			</div><!-- /.modal-content -->
+		</div><!-- /.modal-dialog -->
+	</div><!-- /.modal -->
+	<div class="modal fade" id="create-dialog" tabindex="-1" aria-hidden="true">
+		<div class="modal-dialog">
+			<div class="modal-content">
+				<div class="modal-header">
+					<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+					<h4 class="modal-title">Create a New List</h4>
+				</div>
+				<div class="modal-body">
+					<div id="create-alerts"></div>
+					<p>Please enter the name of the list you wish to create.</p>
+					<input type="text" class="form-control" id="create-list_name" placeholder="e.g. Want to See" value=''>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+					<button type="button" class="btn btn-primary" id="create-submit">Create</button>
+				</div>
+			</div><!-- /.modal-content -->
+		</div><!-- /.modal-dialog -->
+	</div><!-- /.modal -->
+	<div class="modal fade" id="delete-dialog" tabindex="-1" aria-hidden="true">
+		<div class="modal-dialog">
+			<div class="modal-content">
+				<div class="modal-header">
+					<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+					<h4 class="modal-title">Delete List</h4>
+				</div>
+				<div class="modal-body">
+					<div class="alert alert-danger" style="margin:20px" id="delete-alert">
+						<p>Are you <strong>sure</strong> you want to <strong>delete</strong> this movie list?</p>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-danger" id="list-delete-yes">Yes</button>
+					<button type="button" class="btn btn-default" data-dismiss="modal">No, I do not want to</button>
+				</div>
+			</div><!-- /.modal-content -->
+		</div><!-- /.modal-dialog -->
+	</div><!-- /.modal -->
+	<div class="modal fade" id="rename-dialog" tabindex="-1" aria-hidden="true">
+		<div class="modal-dialog">
+			<div class="modal-content">
+				<div class="modal-header">
+					<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+					<h4 class="modal-title">Rename List</h4>
+				</div>
+				<div class="modal-body">
+					<div id="rename-alerts"></div>
+					<p>Please enter the new name of this list.</p>
+					<input type="text" class="form-control" id="rename-list_name" placeholder="e.g. Want to See" value=''>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+					<button type="button" class="btn btn-primary" id="rename-submit">Rename</button>
 				</div>
 			</div><!-- /.modal-content -->
 		</div><!-- /.modal-dialog -->

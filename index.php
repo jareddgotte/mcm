@@ -51,6 +51,11 @@ require_once('inc/php-login.php');
 
 $login = new Login();
 
+if (isset($_POST['login'])) {
+	header('Location: http://'.$_SERVER['HTTP_HOST'].$_SERVER['PHP_SELF'], true, 301);
+	exit;
+}
+
 if ($login->isUserLoggedIn() === true) {
 	// the user is logged in. you can do whatever you want here.
 	// for demonstration purposes, we simply show the "you are logged in" view.
