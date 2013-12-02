@@ -1,5 +1,8 @@
 <?php
 
+header("Cache-Control: no-cache, must-revalidate"); // HTTP/1.1
+header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
+
 // I primarily use sessions to reduce the amount of calls I make to TMDb, as well as maintaining a session
 // with TMDb so I can move movies from one list to another
 //session_start();
@@ -108,10 +111,10 @@ foreach ($merged as $k => $v) {
 
 // include html header and display php-login message/error
 $title = 'My Collection';
-$pre_styles = array('themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min');
+$pre_styles = array('themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min'); // 'themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min'
 $post_styles = array('tabdrop', 'typeahead.js-bootstrap', 'mc');
-$pre_scripts = array('libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch.min');
-$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/hogan-2.0.0', 'typeahead.min', 'mc');
+$pre_scripts = array('libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch'); // 'libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch.min'
+$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/hogan-2.0.0', 'typeahead.min', 'mc'); // , 'jquery.sortable'
 $script = "
 console.log('" . serialize($_SESSION) . "'); // debug my session variable
 //console.log('" . ""/*count($merged)*/ . "'); // debug how many movies I have

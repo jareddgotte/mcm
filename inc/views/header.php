@@ -18,10 +18,10 @@
 <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
 <script>window.jQuery || document.write('<script src="js/libs/jquery-1.10.2.min.js">\x3C/script>')</script>
 <?php if (isset($pre_scripts)) foreach ($pre_scripts as $v) printf("<script src=\"js/%s.js\"></script>\n", $v); ?>
-<script src="//netdna.bootstrapcdn.com/bootstrap/3.0.2/js/bootstrap.min.js"></script>
+<script src="//netdna.bootstrapcdn.com/bootstrap/3.0.2/js/bootstrap.js"></script>
 <script>if (typeof($.fn.modal) === 'undefined') document.write('<link rel="stylesheet" href="css/bootstrap.min.css"><script src="js/libs/bootstrap.min.js">\x3C/script>')</script>
 <script src="js/nav.js"></script>
-<?php if (isset($post_scripts)) foreach ($post_scripts as $v) printf("<script src=\"js/%s.js\"></script>\n", $v); ?>
+<?php if (isset($post_scripts)) foreach ($post_scripts as $v) printf("<script src=\"js/%s.js?v=%s\"></script>\n", $v, rand(1, 20000)); ?>
 <?php echo (isset($script)) ? '<script>' . $script . "</script>\n" : ''; ?>
 
 </head>

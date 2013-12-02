@@ -476,15 +476,15 @@ $(function () {
 		})
 		return { lo: lo, hi: hi }
 	}
+	var start_state = false
+	var stop_state = false
+	var start_pos = false
+	var stop_pos = false
 	$('#header-nav a').on('click', function () {
 		if ($(this).attr('href').substr(1) === 'create') {
 			$('#create-dialog').modal()
 		}
 		else if ($(this).attr('href').substr(1) === 'adjust') {
-			var start_state = false
-			var stop_state = false
-			var start_pos = false
-			var stop_pos = false
 			$('#adjust-dialog')
 				.modal()
 				.html('')
@@ -500,7 +500,7 @@ $(function () {
 								//var 
 								$.each(db, function (i, e) {
 									console.log(e)
-									ret += '<li ' + ((e.list_id == currentList)? 'class="active" ' : '') + 'data-listid="' + e.list_id + '"><span class="glyphicon glyphicon-resize-vertical sort-block"></span><a href="#">' + e.list_name + '</a></li>'
+									ret += '<li ' + ((e.list_id == currentList)? 'class="active" ' : '') + 'data-listid="' + e.list_id + '"><!--span class="glyphicon glyphicon-resize-vertical sort-block"></span--><a href="#">' + e.list_name + '</a></li>'
 								})
 								return ret += '</ul>'
 							})() + '\
@@ -512,8 +512,7 @@ $(function () {
 						</div><!-- /.modal-content -->\
 					</div><!-- /.modal-dialog -->')
 			$('#sortit').sortable({
-				axis: 'y'
-			,	start: function () {
+				start: function () {
 					if (start_state === false) {
 						start_state = $(this).sortable('toArray', { attribute: 'data-listid' })
 						if (start_state[0] === '') start_state.shift()
@@ -534,6 +533,7 @@ $(function () {
 					//console.log(stop_pos)
 				}
 			})
+
 			$('#adjust-dialog #save').on('click', function () {
 				//console.log('save')
 				if (compareOrderedArray(start_state, stop_state)) {
@@ -562,6 +562,27 @@ $(function () {
 				})
 			})
 		}
+	})
+	$('#adjust-dialog').on('shown.bs.modal', function() {
+		console.log('test')
+		$('body').prepend('shown ')
+		$('#sortit li').trigger('touchstart')
+		//$('#sortit').sortable()
+		//.disableSelection()
+		/*$(window).children().trigger('orientationchange')
+		$('#adjust-dialog').trigger('orientationchange')
+		$(window).children().trigger('resize')
+		$('#adjust-dialog').trigger('resize')
+		$(window).children().trigger('scroll')
+		$('#adjust-dialog').trigger('scroll')*/
+	})
+	$('#adjust-dialog').on('hidden.bs.modal', function() {
+		/*$(window).children().trigger('orientationchange')
+		$('#adjust-dialog').trigger('orientationchange')
+		$(window).children().trigger('resize')
+		$('#adjust-dialog').trigger('resize')
+		$(window).children().trigger('scroll')
+		$('#adjust-dialog').trigger('scroll')*/
 	})
 	$('#create-submit').on('click', function () {
 		$('#create-alerts').html('')
