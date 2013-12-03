@@ -191,6 +191,7 @@ function enableLists () {
 		db[currentListPos].display_log = 1
 	} else {
 		$('#main-alerts').append('<div class="alert alert-info"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Welcome! Since you are new, please create a new list by clicking on the "Create List" button at the top.  Please enjoy!</div>')
+		$('#list-control').hide()
 	}
 }
 
@@ -576,7 +577,7 @@ $(function () {
 							</div>\
 							<div class="modal-body">\
 								<p>Distribute this link to share your public lists:</p>\
-								<p><strong>http://jaredgotte.com/share.php?id=' + user_id + '</strong></p>\
+								<p><strong>http://jaredgotte.com/mcm/share.php?id=' + user_id + '</strong></p>\
 								<p>By default, all of your lists are private.  If you would like to publicly share your lists, check them then save below.</p>' + (function () {
 								var ret = '<ul class="nav nav-pills nav-stacked" id="shareit">'
 								$.each(db, function (i, e) {
@@ -635,6 +636,7 @@ $(function () {
 		}
 	})
 	$('#create-submit').on('click', function () {
+		var that = $(this)
 		$('#create-alerts').html('')
 		//console.log('creating')
 		$(this).addClass('disabled')
@@ -659,6 +661,7 @@ $(function () {
 					$('#create-alerts').html('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully created list!</div>')
 					var list_id = Number(msg.substr(14))
 					createList(create_list_name, list_id, db.length)
+					$('#list-control').show()
 				}
 				else $('#create-alerts').html('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong!</div>')
 				that.removeClass('disabled')
