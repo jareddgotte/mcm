@@ -38,7 +38,7 @@ if ($login->messages) {
 			</form>
 			<div class="btn-group btn-group-justified">
 				<a class="btn btn-default" href="register.php"><?php echo $phplogin_lang['Register new account']; ?></a>
-				<a class="btn btn-default disabled" href="password_reset.php"><?php echo $phplogin_lang['I forgot my password']; ?></a>
+				<a class="btn btn-default" href="password_reset.php"><?php echo $phplogin_lang['I forgot my password']; ?></a>
 			</div>
 		</div>
 	</div>

@@ -18,7 +18,7 @@
 <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
 <script>window.jQuery || document.write('<script src="js/libs/jquery-1.10.2.min.js">\x3C/script>')</script>
 <?php if (isset($pre_scripts)) foreach ($pre_scripts as $v) printf("<script src=\"js/%s.js\"></script>\n", $v); ?>
-<script src="//netdna.bootstrapcdn.com/bootstrap/3.0.2/js/bootstrap.js"></script>
+<script src="//netdna.bootstrapcdn.com/bootstrap/3.0.2/js/bootstrap.min.js"></script>
 <script>if (typeof($.fn.modal) === 'undefined') document.write('<link rel="stylesheet" href="css/bootstrap.min.css"><script src="js/libs/bootstrap.min.js">\x3C/script>')</script>
 <script src="js/nav.js"></script>
 <?php if (isset($post_scripts)) foreach ($post_scripts as $v) printf("<script src=\"js/%s.js?v=%s\"></script>\n", $v, rand(1, 20000)); ?>
@@ -42,17 +42,22 @@
 		<div class="collapse navbar-collapse" id="header-nav">
 			<?php
 			$nav_active = (isset($nav_active)) ? $nav_active : false;
-			$nav_auth = '
-				<ul class="nav navbar-nav">
-					<li><a href="#create">Create List</a></li>
-					<li><a href="#adjust">Adjust Lists</a></li>
-				</ul>
+			$nav_auth = '';
+			if (isset($sharing) === FALSE) {
+				$nav_auth .= '
+					<ul class="nav navbar-nav">
+						<li><a href="#create">Create List</a></li>
+						<li><a href="#adjust">Adjust Lists</a></li>
+						<li><a href="#share">Share Lists</a></li>
+					</ul>';
+			}
+			$nav_auth .= '
 				<ul class="nav navbar-nav navbar-right">
-					<li class="disabled"><a href="about.php">About</a></li>
+					<li' . (($nav_active == 'About') ? ' class="active"' : '') . '><a href="about.php">About</a></li>
 					<li class="dropdown">
 						<a class="dropdown-toggle" data-toggle="dropdown" href="#">' . ((isset($_SESSION['user_name'])) ? $_SESSION['user_name'] : '') . ' <span class="caret"></span></a>
 						<ul class="dropdown-menu">
-							<li class="disabled"><a href="edit.php">Account</a></li>
+							<li' . (($nav_active == 'Account') ? ' class="active"' : '') . '><a href="edit.php">Account</a></li>
 							<li class="divider"></li>
 							<li><a href="index.php?logout">' . $phplogin_lang['Logout'] . '</a></li>
 						</ul>
@@ -65,11 +70,11 @@
 					<li' . (($nav_active == 'Register') ? ' class="active"' : '') . '><a href="register.php">Register</a></li>
 				</ul>
 				<ul class="nav navbar-nav navbar-right">
-					<li class="disabled"><a href="about.php">About</a></li>
+					<li' . (($nav_active == 'About') ? ' class="active"' : '') . '><a href="about.php">About</a></li>
 				</ul>
 			';
 			if (isset($login))
-				if ($login->isUserLoggedIn() == true)
+				if ($login->isUserLoggedIn() === true)
 					echo $nav_auth;
 				else echo $nav_noauth;
 			else echo $nav_noauth;

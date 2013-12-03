@@ -4,11 +4,6 @@
 #list-tabs {
 	margin-left: -2px;
 }
-#list-tabs .ui-sortable-placeholder {
-	visibility: visible !important;
-	border-radius: 4px;
-	background: #f8f8f8;
-}
 #main-alerts .alert {
 	margin: 10px 0;
 }
@@ -27,7 +22,6 @@
 	width: 195px;
 	height: 288px;
 	margin: 5px;
-	/*float: left;*/
 	cursor: pointer;
 }
 #dialog #imdb-icon {
@@ -57,17 +51,29 @@
 #dialog .modal-footer {
 	margin-top: 0
 }
-#adjust-dialog #sortit li {
+#adjust-dialog #sortit li,
+#share-dialog #shareit li {
 	overflow: hidden;
 }
-#adjust-dialog #sortit li a {
-	float: left;
+#adjust-dialog #sortit li.active {
+	color: #428bca;
 }
-#adjust-dialog #sortit .sort-block {
+#adjust-dialog #sortit li a,
+#share-dialog #shareit li a {
+	float: left;
+	margin-left: 15px;
+}
+#adjust-dialog #sortit .sort-block,
+#share-dialog #shareit input {
 	float: left;
 	line-height: 40px;
 	margin-right: 5px;
 	font-size: 25px;
+	cursor: pointer;
+}
+#adjust-dialog #sortit li:first-child .up-btn,
+#adjust-dialog #sortit li:last-child .down-btn {
+	visibility: hidden;
 }
 
 #list-control .col-xs-6:nth-child(odd) { padding-right: 5px }

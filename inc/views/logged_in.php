@@ -58,7 +58,7 @@ if ($query->execute() === FALSE) {
 $movie_lists = array();
 while ($row = $query->fetch(PDO::FETCH_OBJ)) {
 	//printf("%s %s\n", $row->list_rank, $row->movie_list_id);
-	$movie_lists[(int)$row->list_rank] = array($row->movie_list_id, $row->list_name, $row->list_description);
+	$movie_lists[(int)$row->list_rank] = array($row->movie_list_id, $row->list_name, $row->list_description, (int)$row->share);
 }
 ksort($movie_lists);
 //var_dump($movie_lists);
@@ -72,7 +72,7 @@ foreach ($movie_lists as $v) {
 		$errorInfo = $query->errorInfo();
 		$errors[] = 'Execute error: ' . $errorInfo[2];
 	}
-	$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
+	$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'share' => $v[3], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 }
 $db_var = json_encode($db_var);
 //var_dump($movie_lists);
@@ -111,16 +111,18 @@ foreach ($merged as $k => $v) {
 
 // include html header and display php-login message/error
 $title = 'My Collection';
-$pre_styles = array('themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min'); // 'themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min'
+//$pre_styles = array(); // 'themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min'
 $post_styles = array('tabdrop', 'typeahead.js-bootstrap', 'mc');
-$pre_scripts = array('libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch'); // 'libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch.min'
+//$pre_scripts = array(); // 'libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch.min'
 $post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/hogan-2.0.0', 'typeahead.min', 'mc'); // , 'jquery.sortable'
 $script = "
-console.log('" . serialize($_SESSION) . "'); // debug my session variable
+//console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
 //console.log('" . ""/*count($merged)*/ . "'); // debug how many movies I have
 
+var user_id = '" . $_SESSION['user_id'] . "'
+//console.log(user_id)
 var db = " . $db_var . "
-console.log(db)
+//console.log(db)
 var base_url = '" . $base_url . "'
 var poster_size_big = '" . $poster_size . "'
 var poster_size_small = '" . $_SESSION['tmdb_config']['images']['poster_sizes'][0] . "'
@@ -191,6 +193,8 @@ foreach($movie_lists as $v) {
 	<div class="modal fade" id="dialog" tabindex="-1" aria-hidden="true">
 	</div><!-- /.modal -->
 	<div class="modal fade" id="adjust-dialog" tabindex="-1" aria-hidden="true">
+	</div><!-- /.modal -->
+	<div class="modal fade" id="share-dialog" tabindex="-1" aria-hidden="true">
 	</div><!-- /.modal -->
 	<div class="modal fade" id="import-dialog" tabindex="-1" aria-hidden="true">
 		<div class="modal-dialog">
