@@ -19,10 +19,13 @@
 	height: 138px;*/
 	/*width: 164px;
 	height: 241px;*/
-	width: 195px;
-	height: 288px;
+	/*width: 195px;
+	height: 288px;*/
+	width: 196px;
+	height: 290px;
 	margin: 5px;
 	cursor: pointer;
+	float: left;
 }
 #dialog #imdb-icon {
 	margin: 0 auto
@@ -90,7 +93,6 @@
 		width: 174px;
 		height: 256px;
 		margin: 4px;
-		float: left;
 	}
 }
 @media (min-width: 992px) {
@@ -110,6 +112,8 @@
 	.tab-pane img {
 		/*width: 180px;
 		height: 265px;*/
+		/*width: 195px;
+		height: 288px;*/
 		margin: 6px;
 	}
 }

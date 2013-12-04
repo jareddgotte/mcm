@@ -46,13 +46,19 @@ function displayTable () {
 	html = '<div class="posters">'
 	$.each(ListItemsJSON, function (i, v) {
 		if (v.poster_path !== null) {
-			html += '<img class="lazy img-thumbnail" id="' + v.movie_id + '" data-original="' + base_url + poster_size_big + v.poster_path + '" alt="' + v.title + "\">\n"
+			html += '<img class="lazy img-thumbnail" id="' + v.movie_id + '" data-original="' + base_url + poster_size_big + v.poster_path + '" alt="' + v.title + "\">"
 		}
 	})
 	html += '</div>'
 	//console.log(currentList)
 	$('#' + currentList).html(html) // Set that HTML now
 	
+	$('.tab-pane img:first-child').bind('transitionend webkitTransitionEnd oTransitionEnd', function(e) {
+		if (e.originalEvent.propertyName === 'width') {
+			$(window).trigger('scroll')
+		}
+	})
+	$(window).trigger('resize')
 	enableFunctions() // We enable our functions now so tooltips and the dialog box work.
 }
 
@@ -183,6 +189,7 @@ function enableLists () {
 			db[currentListPos].display_log = 1
 		}
 		$(this).tab('show')
+		$(window).trigger('resize')
 		$(window).trigger('scroll')
 	})
 	

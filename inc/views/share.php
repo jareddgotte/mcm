@@ -73,6 +73,36 @@ if (db.length > 0) {
 }
 var currentSort = checkSortOrder('sort') // = 'name'
 var currentOrder = checkSortOrder('order') // = 'asc'
+
+$(function() {
+	//$('.navbar').append('<div id=\"reso\"style=\"float: right; padding: 2px\"></div>')
+	$('.tab-pane img:first-child').bind('transitionend webkitTransitionEnd oTransitionEnd', function(e) {
+		//console.log(e.originalEvent.propertyName)
+		if (e.originalEvent.propertyName === 'width') {
+			$(window).trigger('scroll')
+		}
+	})
+	$(window).on('resize', function () {
+		var cw = $('.container').outerWidth()
+		var m = 5
+		var w = 195
+		var n = Math.round((cw+2*m-30)/(2*m+w))
+		
+		for (var i = 0; i <= 5; i++) {
+			m += (i % 2 === 0)? i : -i
+			w = (cw+2*m-30)/n-2*m
+			if (w % 1 === 0) {
+				break
+			}
+		}
+		w = Math.floor(w)
+		h = Math.round((w-10)*278/185+10)
+		//$('#reso').html('n:' + n + ' m:' + m + ' w:' + w + ' h:' + h + ' ' + cw)
+		$('.tab-pane img').css('width', w + 'px').css('height', h + 'px').css('margin', m + 'px')
+		$('.tab-pane .posters').css('margin', '0 -' + m + 'px')
+	})
+	setTimeout(function() { $(window).trigger('resize') }, 1)
+})
 ";
 
 $title = 'Share';
@@ -102,7 +132,7 @@ foreach($movie_lists as $v) {
 	<div id="main-alerts"></div>
 	<div class="row" id="list-control">
 		<div class="col-xs-12 col-sm-8"><input type="text" class="form-control" id="search_collection" placeholder="Search My Collection"></div>
-		<div class="col-xs-6 col-sm-4">
+		<div class="col-xs-12 col-sm-4">
 			<div class="btn-group btn-block">
 				<button type="button" class="btn btn-default btn-block dropdown-toggle" data-toggle="dropdown">View <span class="caret"></span></button>
 				<ul class="dropdown-menu btn-block pull-right" id="sort-order">

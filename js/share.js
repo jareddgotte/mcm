@@ -53,6 +53,12 @@ function displayTable () {
 	//console.log(currentList)
 	$('#' + currentList).html(html) // Set that HTML now
 	
+	$('.tab-pane img:first-child').bind('transitionend webkitTransitionEnd oTransitionEnd', function(e) {
+		if (e.originalEvent.propertyName === 'width') {
+			$(window).trigger('scroll')
+		}
+	})
+	$(window).trigger('resize')
 	enableFunctions() // We enable our functions now so tooltips and the dialog box work.
 }
 
@@ -140,6 +146,7 @@ function enableLists () {
 			db[currentListPos].display_log = 1
 		}
 		$(this).tab('show')
+		$(window).trigger('resize')
 		$(window).trigger('scroll')
 	})
 	
