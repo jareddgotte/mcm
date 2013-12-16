@@ -227,6 +227,31 @@ function moveMovie (from_list_id, to_list_id, movie_id) {
 	})
 }
 
+function enableSearchCollection (template) {
+	// SEARCH COLLECTION FOR MOVIE
+	if (db.length > 0) {
+		var search_collection_map = $.map(db, function (v) {
+			var movie_details_map = $.map(v.movie_details, function (w) {
+				var classed = ''
+				if (w.poster_path === null) classed = 'invisible'
+				var tags = []
+				$.each(w.title.concat(' ', w.original_title, ' ', w.release_date.substr(0, 4)).split(' '), function (i, e) {
+					if ($.inArray(e, tags) === -1) tags.push(e)
+				})
+				return { tmdb_title: w.title, tokens: tags, tmdb_movie_id: w.movie_id, tmdb_poster_path: w.poster_path, tmdb_release_date: w.release_date, tmdb_release_date_abbr: w.release_date.substr(0, 4), classed: classed }
+			})
+			return { name: v.movie_list_id, valueKey: 'tmdb_title', local: movie_details_map, header: '<h4>' + v.list_name + '</h4>', engine: Hogan, template: template }
+		})
+		$('#search_collection').val('')
+		$('#search_collection').typeahead('destroy')
+		$('#search_collection').typeahead(search_collection_map)
+	}
+	$('#search_collection').on('typeahead:selected', function (e, o, name) {
+		$('#dialog').modal({ remote: 'dialog.php?id=' + o.tmdb_movie_id })
+	})
+	$('#list-control .tt-hint').addClass('form-control')
+}
+
 // This function is necessary because for every time we switch tables, we must enable the Tooltip and Dialog functions.
 function enableFunctions () {
 	//console.log('en fncs: ' + currentList)
@@ -417,6 +442,7 @@ $(function () {
 					addMovie(currentList, o.tmdb_movie_id, o.tmdb_title, o.tmdb_original_title, o.tmdb_poster_path, o.tmdb_release_date)
 					db[currentListPos].display_log = 0
 					displayTable()
+					enableSearchCollection(template)
 					break;
 				case 2:
 					$('#main-alerts').append('<div class="alert alert-warning"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Movie already exists in your collection!</div>')
@@ -430,31 +456,8 @@ $(function () {
 	
 	
 	// SEARCH COLLECTION FOR MOVIE
-	if (db.length > 0) {
-		var search_collection_map = $.map(db, function (v) {
-			var movie_details_map = $.map(v.movie_details, function (w) {
-				var classed = ''
-				if (w.poster_path === null) classed = 'invisible'
-				var tags = []
-				$.each(w.title.concat(' ', w.original_title, ' ', w.release_date.substr(0, 4)).split(' '), function (i, e) {
-					if ($.inArray(e, tags) === -1) tags.push(e)
-				})
-				return { tmdb_title: w.title, tokens: tags, tmdb_movie_id: w.movie_id, tmdb_poster_path: w.poster_path, tmdb_release_date: w.release_date, tmdb_release_date_abbr: w.release_date.substr(0, 4), classed: classed }
-			})
-			return { name: v.movie_list_id, valueKey: 'tmdb_title', local: movie_details_map, header: '<h4>' + v.list_name + '</h4>', engine: Hogan, template: template }
-		})
-		$('#search_collection').typeahead(search_collection_map)
-	}
-	$('#search_collection').on('typeahead:selected', function (e, o, name) {
-		$('#dialog').modal({ remote: 'dialog.php?id=' + o.tmdb_movie_id })
-	})
-	
-	// Remove anything that's in the 'add a movie' / 'search my collection' inputs after clicking off of them.
-	$('#add_movie, #search_collection').on('blur', function () {
-		$(this).val('')
-		$('.tt-hint').val('')
-	})
-	
+	enableSearchCollection(template)
+
 	function statesBad (a, b) {
 		if (a === b || a.length !== b.length) return true
 		var ret = true
@@ -733,6 +736,7 @@ $(function () {
 							$('#dialog').modal('hide')
 							db[currentListPos].display_log = 0
 							displayTable()
+							enableSearchCollection(template)
 						}
 						else {
 							$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong!</div>')
@@ -756,6 +760,7 @@ $(function () {
 				displayTable()
 				db[currentListPos].display_log = 0
 				db[listPos(toList)].display_log = 0
+				enableSearchCollection(template)
 			})
 		})
 	})
