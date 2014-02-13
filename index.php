@@ -10,7 +10,6 @@ error_reporting(E_ALL ^ E_NOTICE);
 
 // http://docs.themoviedb.apiary.io/
 // https://www.themoviedb.org/documentation/api/wrappers-libraries
-// https://github.com/alexanderdickson/waitForImages
 
 /* When considering adding a search/add function, use this code
 var api_key = 'YOUR_API_KEY';

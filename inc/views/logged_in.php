@@ -77,37 +77,34 @@ foreach ($movie_lists as $v) {
 $db_var = json_encode($db_var);
 //var_dump($movie_lists);
 
-
-/*$WTSList = $_SESSION['tmdb_obj']->getList(WTS_LIST_KEY);
-$WTSListItemsJSON = json_encode($WTSList['items']);
-
-$HNSList = $_SESSION['tmdb_obj']->getList(HNS_LIST_KEY);
-$HNSListItemsJSON = json_encode($HNSList['items']);
-
-$SeenList = $_SESSION['tmdb_obj']->getList(SEEN_LIST_KEY);
-$SeenListItemsJSON = json_encode($SeenList['items']);*/
-
-
 // I use the following code block to get a list of all of the movies I have so I can compare them with my own
-//$merged = array_merge($WTSList['items'], $HNSList['items'], $SeenList['items']);
-/*function cmp ($a, $b) {
-	$al = strtolower($a['title']);
-	$bl = strtolower($b['title']);
+/*echo "<!--\n";
+$tmp = json_decode($db_var);
+$merged = array();
+foreach ($tmp as $v) {
+	foreach ($v->movie_details as $v2) {
+		$merged[] = $v2->title;
+	}
+}
+function cmp ($a, $b) {
+	$al = strtolower($a);
+	$bl = strtolower($b);
 	if ($al == $bl) {
 		return 0;
 	}
 	return ($al < $bl) ? -1 : 1;
 }
 foreach ($merged as $k => $v) {
-	$res = $v['title'];
-	if (substr($v['title'], 0, 4) == 'The ')
-		$res = substr($v['title'], 4) . ', The';
-	$merged[$k]['title'] = $res;
+	$res = $v;
+	if (substr($v, 0, 4) == 'The ')
+		$res = substr($v, 4) . ', The';
+	$merged[$k] = $res;
 }
 usort($merged, "cmp");
 foreach ($merged as $k => $v) {
-	printf("%s\n", $v['title']);
-}*/
+	printf("%s\n", $v);
+}
+echo "-->\n";*/
 
 // include html header and display php-login message/error
 $title = 'My Collection';
@@ -117,18 +114,23 @@ $post_styles = array('tabdrop', 'typeahead.js-bootstrap', 'mc');
 $post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/hogan-2.0.0', 'typeahead.min', 'mc'); // , 'jquery.sortable'
 $script = "
 //console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
-//console.log('" . ""/*count($merged)*/ . "'); // debug how many movies I have
 
 var user_id = '" . $_SESSION['user_id'] . "'
-//console.log(user_id)
 var db = " . $db_var . "
-//console.log(db)
 var base_url = '" . $base_url . "'
 var poster_size_big = '" . $poster_size . "'
 var poster_size_small = '" . $_SESSION['tmdb_config']['images']['poster_sizes'][0] . "'
 
+// log how many movies I have
+var movie_num = 0
+for (var i = 0; i < db.length; i++) {
+	var num = db[i].movie_details.length
+	console.log(num)
+	movie_num += num
+}
+console.log(movie_num)
+
 // Variables to record whether or not we've loaded the table yet or not.  This is to prevent multiple loadings of each table if we keep going back and forth between tabs
-//console.log(db.length)
 if (db.length > 0) {
 	var currentList = db[0].list_id
 	var currentListPos = listPos(currentList)
