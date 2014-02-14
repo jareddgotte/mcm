@@ -463,7 +463,7 @@ $(function () {
 			//}
 			switch (code) {
 				case 1:
-					$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully added movie!</div>')
+					$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully added <abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">movie</abbr>!</div>')
 					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
 					addMovie(currentList, o.tmdb_movie_id, o.tmdb_title, o.tmdb_original_title, o.tmdb_poster_path, o.tmdb_release_date)
 					db[currentListPos].display_log = 0
