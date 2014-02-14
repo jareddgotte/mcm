@@ -111,7 +111,7 @@ $title = 'My Collection';
 //$pre_styles = array(); // 'themes/jquery-ui-1.10.3/smoothness/jquery-ui.sortable.min'
 $post_styles = array('tabdrop', 'typeahead.js-bootstrap', 'mc');
 //$pre_scripts = array(); // 'libs/jquery-ui-1.10.3.sortable.min', 'jquery.ui.touch-punch.min'
-$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/hogan-2.0.0', 'typeahead.min', 'mc'); // , 'jquery.sortable'
+$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/handlebars.min', 'typeahead.bundle.min', 'mc'); // , 'jquery.sortable'
 $script = "
 //console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
 

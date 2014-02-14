@@ -213,19 +213,34 @@ $(function () {
 	// SEARCH COLLECTION FOR MOVIE
 	var template = '<p><img class="img-thumbnail {{classed}}" src="' + base_url + 'w45{{tmdb_poster_path}}" alt="{{tmdb_title}}" width="55" height="78"><span><strong>{{tmdb_title}}</strong> <small>(<abbr title="{{tmdb_release_date}}">{{tmdb_release_date_abbr}}</abbr>)</small></span></p>'
 	if (db.length > 0) {
-		var search_collection_map = $.map(db, function (v) {
-			var movie_details_map = $.map(v.movie_details, function (w) {
-				var classed = ''
-				if (w.poster_path === null) classed = 'invisible'
-				var tags = []
-				$.each(w.title.concat(' ', w.original_title, ' ', w.release_date.substr(0, 4)).split(' '), function (i, e) {
-					if ($.inArray(e, tags) === -1) tags.push(e)
+				var taObjs = []
+		var bhObjs = []
+		$.each(db, function (i, e) {
+			bhObjs.push(new Bloodhound({
+				datumTokenizer: function(d) { return Bloodhound.tokenizers.whitespace(d.tmdb_title) }
+			,	queryTokenizer: Bloodhound.tokenizers.whitespace
+			,	limit: 5
+			,	local: $.map(e.movie_details, function (w) {
+					var classed = ''
+					if (w.poster_path === null) classed = 'invisible'
+					return { tmdb_title: w.title, tmdb_movie_id: w.movie_id, tmdb_poster_path: w.poster_path, tmdb_release_date: w.release_date, tmdb_release_date_abbr: w.release_date.substr(0, 4), classed: classed }
 				})
-				return { tmdb_title: w.title, tokens: tags, tmdb_movie_id: w.movie_id, tmdb_poster_path: w.poster_path, tmdb_release_date: w.release_date, tmdb_release_date_abbr: w.release_date.substr(0, 4), classed: classed }
+			}))
+			
+			bhObjs[i].initialize()
+			
+			taObjs.push({
+				name: 'list_' + i
+			,	displayKey: 'tmdb_title'
+			,	source: bhObjs[i].ttAdapter()
+			,	templates: {
+					suggestion: Handlebars.compile(template)
+				,	header: '<h4>' + e.list_name + '</h4>'
+				}
 			})
-			return { name: v.movie_list_id, valueKey: 'tmdb_title', local: movie_details_map, header: '<h4>' + v.list_name + '</h4>', engine: Hogan, template: template }
 		})
-		$('#search_collection').typeahead(search_collection_map)
+		
+		$('#search_collection').typeahead(null, taObjs)
 	}
 	$('#search_collection').on('typeahead:selected', function (e, o, name) {
 		$('#dialog').modal({ remote: 'dialog.php?id=' + o.tmdb_movie_id })

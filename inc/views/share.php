@@ -54,7 +54,7 @@ $db_var = json_encode($db_var);
 // include html header and display php-login message/error
 $title = 'My Collection';
 $post_styles = array('tabdrop', 'typeahead.js-bootstrap', 'mc');
-$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/hogan-2.0.0', 'typeahead.min', 'share'); // , 'jquery.sortable'
+$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/handlebars.min', 'typeahead.bundle.min', 'share'); // , 'jquery.sortable'
 $script = "
 //console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
 //console.log('" . ""/*count($merged)*/ . "'); // debug how many movies I have
