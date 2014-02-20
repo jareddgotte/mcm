@@ -72,7 +72,7 @@ foreach ($movie_lists as $v) {
 		$errorInfo = $query->errorInfo();
 		$errors[] = 'Execute error: ' . $errorInfo[2];
 	}
-	$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'share' => $v[3], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
+	$db_var[] = array('list_id' => (int)$v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'share' => $v[3], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 }
 $db_var = json_encode($db_var);
 //var_dump($movie_lists);
@@ -125,15 +125,16 @@ var poster_size_small = '" . $_SESSION['tmdb_config']['images']['poster_sizes'][
 var movie_num = 0
 for (var i = 0; i < db.length; i++) {
 	var num = db[i].movie_details.length
-	console.log(num)
+	//console.log(num)
 	movie_num += num
 }
-console.log(movie_num)
+//console.log(movie_num)
 
 // Variables to record whether or not we've loaded the table yet or not.  This is to prevent multiple loadings of each table if we keep going back and forth between tabs
+var currentList, currentListPos
 if (db.length > 0) {
-	var currentList = db[0].list_id
-	var currentListPos = listPos(currentList)
+	currentList = db[0].list_id
+	currentListPos = listPos(currentList)
 }
 var currentSort = checkSortOrder('sort') // = 'name'
 var currentOrder = checkSortOrder('order') // = 'asc'

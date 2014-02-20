@@ -44,11 +44,14 @@ function displayTable () {
 
 	// Create the HTML we are going to use as our table of movies
 	html = '<div class="posters">'
-	$.each(ListItemsJSON, function (i, v) {
-		if (v.poster_path !== null) {
-			html += '<img class="lazy img-thumbnail" id="' + v.movie_id + '" data-original="' + base_url + poster_size_big + v.poster_path + '" alt="' + v.title + "\">"
-		}
-	})
+	if (ListItemsJSON.length === 0) html += '<div class="alert alert-info" style="margin: 0 5px;"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" above.</div>'
+	else {
+		$.each(ListItemsJSON, function (i, v) {
+			if (v.poster_path !== null) {
+				html += '<img class="lazy img-thumbnail" id="' + v.movie_id + '" data-original="' + base_url + poster_size_big + v.poster_path + '" alt="' + v.title + "\">"
+			}
+		})
+	}
 	html += '</div>'
 	//console.log(currentList)
 	$('#' + currentList).html(html) // Set that HTML now
@@ -63,7 +66,7 @@ function displayTable () {
 }
 
 function listPos (list_id) {
-	return $.inArray(list_id, $.map(db, function (v) { return v.list_id }))
+	return $.inArray(list_id*1, $.map(db, function (v) { return v.list_id })) // list_id is multiplied by 1 so it becomes an int
 }
 
 function getCookie (cName) {
@@ -105,23 +108,32 @@ function checkSortOrder (cName) {
 }
 
 function createList (list_name, list_id) {
+	$('#welcome-alert').remove()
 	window.location.hash = 'list-' + list_id
 	$('#list-tabs').append('<li data-listid="' + list_id + '"><a href="#' + list_id + '" data-toggle="pill">' + list_name + '</a></li>');
 	$('#list-containers').append('<div class="tab-pane" id="' + list_id + '"></div>');
-	db.push({ display_log: 0, list_description: '', list_id: list_id, list_name: list_name, movie_details: []})
+	db.push({ display_log: 0, list_description: '', list_id: list_id*1, list_name: list_name, movie_details: []}) // list_id is multiplied by 1 to become an int
 	currentList = list_id
+	//console.log('createList: ' + currentList)
 	currentListPos = listPos(currentList)
 	displayTable()
 	$('#list-tabs li:last-child a').click()
 	$(window).trigger('resize')
+	enableLists()
 }
 
 function deleteList (list_id) {
 	//console.log('deleting list')
 	var pos = listPos(list_id)
+	//console.log(pos)
 	db.splice(pos, 1)
-	$('#list-tabs li:nth-child(' + (+pos + 1) + ') a').click()
 	$('#list-tabs li:nth-child(' + (+pos + 2) + ')').remove()
+	if (pos === 0) pos++
+	$('#list-tabs li:nth-child(' + (+pos + 1) + ') a').click()
+	$('#' + list_id).remove()
+	if (db.length === 0) {
+		$('#list-control').hide()
+	}
 }
 
 function renameList (list_id, list_name) {
@@ -136,7 +148,7 @@ function adjustLists (stop_state) {
 		tmp[i] = db[listPos(e)]
 	})
 	db = tmp
-	$('#list-tabs').html('')
+	$('#list-tabs').children().each(function (i, e) { if (i !== 0) $(e).remove() }) // this removes every list tab while leaving the TabDrop <li> in place so the plugin will still work after adjusting the lists
 	$('#list-containers').html('')
 	$.each(db, function (i, e) {
 		$('#list-tabs').append('<li data-listid="' + e.list_id + '"><a href="#' + e.list_id + '" data-toggle="pill">' + e.list_name + '</a></li>')
@@ -153,6 +165,9 @@ function enableLists () {
 		if ($(this).attr('href').substr(0, 1) === '#') e.preventDefault()
 	})
 	
+	//console.log('tab: ' + tab)
+	$('#list-tabs').tabdrop()
+	
 	// We care about hashes so our table can go to the correct tab upon refreshing or directly being linked to a particular list
 	var tabNum = 1
 	if (window.location.hash.substr(1, 5) === 'list-') {
@@ -164,18 +179,17 @@ function enableLists () {
 		}
 		tabNum += (tabNum < 0) ? 2 : 1 // this offset is for the :nth-child() selector
 	}
+	tabNum++ // this offset is for TabDrop
+
 	$('#' + currentList).addClass('active')
 	$('#list-tabs li:nth-child(' + tabNum + ')').addClass('active')
 	
-	if (db.length > 0) {
+	/*if (db.length === 1) {
 		if (db[currentListPos].movie_details.length == 0) {
 			$('#main-alerts').append('<div class="alert alert-info"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" below.</div>')
 		}
-	}
+	}*/
 
-	//console.log('tab: ' + tab)
-	$('#list-tabs').tabdrop()
-	
 	// Load our tables for their respective topics
 	$('#list-tabs a').on('click', function () {
 		if ($(this).parent().hasClass('tabdrop')) return true
@@ -197,7 +211,7 @@ function enableLists () {
 		displayTable() // By default, display the "What to See" table
 		db[currentListPos].display_log = 1
 	} else {
-		$('#main-alerts').append('<div class="alert alert-info"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Welcome! Since you are new, please create a new list by clicking on the "Create List" button at the top.  Please enjoy!</div>')
+		$('#main-alerts').append('<div class="alert alert-info" id="welcome-alert"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Welcome! Since you are new, please create a new list by clicking on the "Create List" button at the top.  Please enjoy!</div>')
 		$('#list-control').hide()
 	}
 }
@@ -353,6 +367,7 @@ $(function () {
 				.done(function (msg) {
 					//console.log(msg) // Useful for debugging
 					if (msg.substr(0, 12) === 'greatsuccess') {
+						//console.log(currentList)
 						$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully deleted list!</div>')
 						window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
 						deleteList(currentList)
@@ -360,6 +375,7 @@ $(function () {
 					else {
 						$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong while trying to delete your list!</div>')
 					}
+					$('#list-delete-yes').off('click')
 					$('#delete-dialog').modal('hide')
 				})
 			})
@@ -448,7 +464,6 @@ $(function () {
 	})
 	
 	$('#add_movie').on('typeahead:selected', function (e, o, name) {
-		//console.log(o)
 		$.ajax({
 			type: 'POST'
 		,	url: 'add_movie.php'
@@ -694,7 +709,7 @@ $(function () {
 				// rely on the msg to see our new list id
 				if (msg.substr(0, 14) === 'movie_list_id:') {
 					$('#create-alerts').html('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully created list!</div>')
-					var list_id = Number(msg.substr(14))
+					var list_id = msg.substr(14)
 					createList(create_list_name, list_id, db.length)
 					$('#list-control').show()
 				}

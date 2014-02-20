@@ -39,8 +39,18 @@ if ($query->execute() === FALSE) {
 
 if (isset($errors)) if (count($errors) > 0) var_dump($errors);
 else {
+	// re-rank our lists
+	$query = $db_connection->prepare('CALL AdjustRanks(:user_id)');
+	$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
+	if ($query->execute() === FALSE) {
+		$errorInfo = $query->errorInfo();
+		$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
+	}
+	if (isset($errors)) if (count($errors) > 0) var_dump($errors);
+	
 	// Update our db var
 	echo 'greatsuccess';
+	
 	/*$query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
 	$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
 	if ($query->execute() === FALSE) {
