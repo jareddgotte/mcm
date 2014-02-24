@@ -151,6 +151,10 @@ foreach($movie_lists as $v) {
 		<?php echo $list_containers; ?>
 	</div>
 	<div class="modal fade" id="dialog" tabindex="-1" aria-hidden="true">
+		<div class="modal-dialog">
+			<div class="modal-content">
+			</div>
+		</div>
 	</div><!-- /.modal -->
 <?php
 // include html footer

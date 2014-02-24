@@ -259,11 +259,11 @@ $(function () {
 	$('#dialog').on('hidden.bs.modal', function () {
 		//console.log('hidden')
 		$(this).removeData('bs.modal')
-		$('#dialog').empty()
-	}).on('shown.bs.modal', function() {
+		$('#dialog').find('.modal-content').empty()
+	}).on('loaded.bs.modal', function() {
 		$('#movie-options').parent().hide()
 		//console.timeEnd('modal exec time')
-		//console.log('shown')
+		//console.log('loaded')
 		// Generate Overview popover
 		$('#overview').on('click', function () {
 			//console.log('test')
