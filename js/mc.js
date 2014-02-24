@@ -44,7 +44,7 @@ function displayTable () {
 
 	// Create the HTML we are going to use as our table of movies
 	html = '<div class="posters">'
-	if (ListItemsJSON.length === 0) html += '<div class="alert alert-info" style="margin: 0 5px;"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" above.</div>'
+	if (ListItemsJSON.length === 0) html += '<div class="alert alert-info" style="margin: 0 6px;"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" above.</div>'
 	else {
 		$.each(ListItemsJSON, function (i, v) {
 			if (v.poster_path !== null) {
@@ -149,7 +149,7 @@ function adjustLists (stop_state) {
 	})
 	db = tmp
 	$('#list-tabs').children().each(function (i, e) { if (i !== 0) $(e).remove() }) // this removes every list tab while leaving the TabDrop <li> in place so the plugin will still work after adjusting the lists
-	$('#list-containers').html('')
+	$('#list-containers').empty()
 	$.each(db, function (i, e) {
 		$('#list-tabs').append('<li data-listid="' + e.list_id + '"><a href="#' + e.list_id + '" data-toggle="pill">' + e.list_name + '</a></li>')
 		$('#list-containers').append('<div class="tab-pane" id="' + e.list_id + '"></div>')
@@ -169,27 +169,22 @@ function enableLists () {
 	$('#list-tabs').tabdrop()
 	
 	// We care about hashes so our table can go to the correct tab upon refreshing or directly being linked to a particular list
-	var tabNum = 1
+	var tabId, tabNum = 1
 	if (window.location.hash.substr(1, 5) === 'list-') {
-		var tabId = window.location.hash.substr(6)
-		tabNum = listPos(tabId)
-		if (tabNum >= 0) {
-			currentList = tabId
-			currentListPos = listPos(currentList)
-		}
-		tabNum += (tabNum < 0) ? 2 : 1 // this offset is for the :nth-child() selector
+		tabId = window.location.hash.substr(6)
 	}
+	else tabId = currentList
+	tabNum = listPos(tabId)
+	if (tabNum >= 0) {
+		currentList = tabId
+		currentListPos = listPos(currentList)
+	}
+	tabNum += (tabNum < 0) ? 2 : 1 // this offset is for the :nth-child() selector
 	tabNum++ // this offset is for TabDrop
 
 	$('#' + currentList).addClass('active')
 	$('#list-tabs li:nth-child(' + tabNum + ')').addClass('active')
 	
-	/*if (db.length === 1) {
-		if (db[currentListPos].movie_details.length == 0) {
-			$('#main-alerts').append('<div class="alert alert-info"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" below.</div>')
-		}
-	}*/
-
 	// Load our tables for their respective topics
 	$('#list-tabs a').on('click', function () {
 		if ($(this).parent().hasClass('tabdrop')) return true
@@ -321,7 +316,7 @@ $(function () {
 			//console.log('renaming')
 			$('#rename-dialog').modal()
 			$('#rename-submit').on('click', function () {
-				$('#rename-alerts').html('')
+				$('#rename-alerts').empty()
 				//console.log('renaming')
 				$(this).addClass('disabled')
 				//console.log($('#rename-list_name').val())
@@ -382,7 +377,7 @@ $(function () {
 		}
 	})
 	$('#import-submit').on('click', function () {
-		$('#import-alerts').html('')
+		$('#import-alerts').empty()
 		//console.log('importing')
 		$(this).addClass('disabled')
 		//console.log($('#import-tmdb_list_id').val())
@@ -545,7 +540,7 @@ $(function () {
 			stop_state = false
 			$('#adjust-dialog')
 				.modal()
-				.html('')
+				.empty()
 				.append('\
 					<div class="modal-dialog">\
 						<div class="modal-content">\
@@ -592,7 +587,6 @@ $(function () {
 				}
 				var changeRange = getChangeRange(start_state, stop_state)
 				//console.log(changeRange)
-				$('#adjust-dialog').html('')
 				$.ajax({
 					type: 'POST'
 				,	url: 'adjust_lists.php'
@@ -617,7 +611,7 @@ $(function () {
 			stop_state = false
 			$('#share-dialog')
 				.modal()
-				.html('')
+				.empty()
 				.append('\
 					<div class="modal-dialog">\
 						<div class="modal-content">\
@@ -626,8 +620,14 @@ $(function () {
 								<h4 class="modal-title">Share Lists</h4>\
 							</div>\
 							<div class="modal-body">\
+								<div id="share-alerts"></div>\
 								<p>Distribute this link to share your public lists:</p>\
-								<p><strong>http://jaredgotte.com/mcm/share.php?id=' + user_id + '</strong></p>\
+								<div class="input-group" style="margin: 0 0 10px;">\
+									<span class="input-group-btn">\
+										<button id="share-copy-button" class="btn btn-primary" type="button" data-clipboard-target="share-copy-input">Copy</button>\
+									</span>\
+									<input id="share-copy-input" type="text" class="form-control" value="http://' + window.location.hostname + '/mcm/share.php?id=' + user_id + '" readonly="readonly" onclick="this.select()">\
+								</div><!-- /input-group -->\
 								<p>By default, all of your lists are private.  If you would like to publicly share your lists, check them then save below.</p>' + (function () {
 								var ret = '<ul class="nav nav-pills nav-stacked" id="shareit">'
 								$.each(db, function (i, e) {
@@ -643,6 +643,13 @@ $(function () {
 							</div>\
 						</div><!-- /.modal-content -->\
 					</div><!-- /.modal-dialog -->')
+
+			ZeroClipboard.config( { moviePath: 'js/libs/ZeroClipboard.swf' } )
+			var clip_client = new ZeroClipboard($('#share-copy-button'))
+			clip_client.on('complete', function () {
+				$('#share-alerts').html('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully copied link!</div>')
+			})
+
 			var list_input_arr = $.makeArray($('#share-dialog ul li input'))
 			start_state = $.map(list_input_arr, function (v) { return ($(v).prop('checked'))? 1 : 0 })
 			//console.log(start_state)
@@ -664,7 +671,7 @@ $(function () {
 				if (statesBad(start_state, stop_state)) {
 					return false
 				}
-				$('#share-dialog').html('')
+				$('#share-dialog').empty()
 				$.ajax({
 					type: 'POST'
 				,	url: 'share_lists.php'
@@ -687,7 +694,7 @@ $(function () {
 	})
 	$('#create-submit').on('click', function () {
 		var that = $(this)
-		$('#create-alerts').html('')
+		$('#create-alerts').empty()
 		//console.log('creating')
 		$(this).addClass('disabled')
 		//console.log($('#create-list_name').val())
@@ -726,10 +733,10 @@ $(function () {
 	$('#dialog').on('hidden.bs.modal', function () {
 		//console.log('hidden')
 		$(this).removeData('bs.modal')
-		$('#dialog').empty()
-	}).on('shown.bs.modal', function() {
+		$('#dialog').find('.modal-content').empty()
+	}).on('loaded.bs.modal', function() {
 		//console.timeEnd('modal exec time')
-		//console.log('shown')
+		//console.log('loaded')
 		// Generate Overview popover
 		$('#overview').on('click', function () {
 			//console.log('test')
@@ -760,7 +767,6 @@ $(function () {
 					$('#delete-alert').remove()
 				})
 				$('#delete-yes').on('click', function () {
-					$('#dialog').html('')
 					$.ajax({
 						type: 'POST'
 					,	url: 'delete_movie.php'
@@ -785,7 +791,6 @@ $(function () {
 				})
 				return true
 			}
-			$('#dialog').html('')
 			var toList = $(this).attr('href').substr(1)
 			//console.log(tlist)
 			$.ajax({

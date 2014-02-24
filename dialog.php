@@ -75,8 +75,6 @@ for ($i = 0; $i < count($genres); $i++) {
 }
 
 echo '
-	<div class="modal-dialog">
-		<div class="modal-content">
 			<div class="modal-header">
 				<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
 				<h4 class="modal-title" id="movie-title">' . $title . ' <small class="hide" id="movie-id">' . $movie_id . '</small></h4>
@@ -130,9 +128,6 @@ echo '
 					</ul>
 				</div>
 			</div>
-		</div><!-- /.modal-content -->
-	</div><!-- /.modal-dialog -->
-	<script>$("#dialog").trigger("shown.bs.modal")</script>
 ';
 
 //echo "<br>".$_POST['id'];

@@ -15,12 +15,6 @@
 }
 .tab-pane img {
 	/* Width and height change here depending on the dimensions of graphic we want to use as our movie poster */
-	/*width: 92px;
-	height: 138px;*/
-	/*width: 164px;
-	height: 241px;*/
-	/*width: 195px;
-	height: 288px;*/
 	width: 196px;
 	height: 290px;
 	margin: 5px;
@@ -110,10 +104,6 @@
 		margin: 0 -6px;
 	}
 	.tab-pane img {
-		/*width: 180px;
-		height: 265px;*/
-		/*width: 195px;
-		height: 288px;*/
 		margin: 6px;
 	}
 }

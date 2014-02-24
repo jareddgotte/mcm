@@ -155,6 +155,7 @@ function enableLists () {
 		db[currentListPos].display_log = 1
 	} else {
 		$('#main-alerts').append('<div class="alert alert-danger">This user has no public lists to showcase.</div>')
+		$('#list-control').hide()
 	}
 }
 
