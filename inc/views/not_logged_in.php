@@ -17,7 +17,7 @@ if ($login->messages) {
 ?>
 
 	<div class="row">
-		<div class="col-xs-12 col-sm-4">
+		<div class="col-xs-12 col-sm-12 col-md-5 col-lg-4">
 			<form method="post" action="index.php" name="loginform">
 				<h2 class="form-signin-heading">Please log in</h2>
 				<div class="form-group">
@@ -38,7 +38,7 @@ if ($login->messages) {
 				<a class="btn btn-default" href="password_reset.php"><?php echo $phplogin_lang['I forgot my password']; ?></a>
 			</div>
 		</div>
-		<div class="col-xs-12 col-sm-8">
+		<div class="col-xs-12 col-sm-12 col-md-7 col-lg-8">
 			<h2>Movie Collection Manager (MCM)</h2>
 			<p>With DVDs being so small, the novelty of owning a movie, and the ever growing number of movies today, many people have huge movie collections to showcase.  Perhaps one of these movie collectors would like to entertain a guest of theirs with a movie?  However, their movie collection size could be overwhelming for their guest to decide on a movie.  The purpose of this project is to help make movie collection browsing easier  with these features:<p>
 			<ul>
