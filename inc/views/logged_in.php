@@ -128,7 +128,7 @@ for (var i = 0; i < db.length; i++) {
 	//console.log(num)
 	movie_num += num
 }
-//console.log(movie_num)
+console.log(movie_num)
 
 // Variables to record whether or not we've loaded the table yet or not.  This is to prevent multiple loadings of each table if we keep going back and forth between tabs
 var currentList, currentListPos

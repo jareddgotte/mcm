@@ -110,8 +110,8 @@ function checkSortOrder (cName) {
 function createList (list_name, list_id) {
 	$('#welcome-alert').remove()
 	window.location.hash = 'list-' + list_id
-	$('#list-tabs').append('<li data-listid="' + list_id + '"><a href="#' + list_id + '" data-toggle="pill">' + list_name + '</a></li>');
-	$('#list-containers').append('<div class="tab-pane" id="' + list_id + '"></div>');
+	$('#list-tabs').append('<li data-listid="' + list_id + '"><a href="#' + list_id + '" data-toggle="pill">' + list_name + '</a></li>')
+	$('#list-containers').append('<div class="tab-pane" id="' + list_id + '"></div>')
 	db.push({ display_log: 0, list_description: '', list_id: list_id*1, list_name: list_name, movie_details: []}) // list_id is multiplied by 1 to become an int
 	currentList = list_id
 	//console.log('createList: ' + currentList)
@@ -212,7 +212,7 @@ function enableLists () {
 }
 
 function addMovie (list_id, movie_id, title, otitle, path, date) {
-	db[listPos(list_id)].movie_details.push({ movie_id: movie_id, title: title, original_title: otitle, poster_path: path, release_date: date })
+	db[listPos(list_id)].movie_details.push({ movie_id: movie_id+'', title: title, original_title: otitle, poster_path: path, release_date: date })
 }
 
 function deleteMovie (list_id, movie_id) {
@@ -220,7 +220,7 @@ function deleteMovie (list_id, movie_id) {
 	$.each(flist, function (i, e) {
 		if (e.movie_id == movie_id) {
 			flist.splice(i, 1)
-			return false;
+			return false
 		}
 	})
 }
@@ -231,12 +231,100 @@ function moveMovie (from_list_id, to_list_id, movie_id) {
 	$.each(flist, function (i, e) {
 		if (e.movie_id === movie_id) {
 			db[listPos(to_list_id)].movie_details.push(flist.splice(i, 1)[0])
-			return false;
+			return false
 		}
 	})
 }
 
+function enableAddMovie (template) {
+	//console.log('enabling add movies')
+	// ADD MOVIE
+	var movie_arr = []
+	$.each(db, function (i, e) {
+		$.each(e.movie_details, function (i, f) {
+			movie_arr.push(+f.movie_id)
+		})
+	})
+	//console.log(movie_arr)
+
+	var taAddMovie = new Bloodhound( {
+		datumTokenizer: function(d) { return Bloodhound.tokenizers.whitespace(d.tmdb_title) }
+	,	queryTokenizer: Bloodhound.tokenizers.whitespace
+	,	limit: 5
+	,	remote: {
+			url: 'http://api.themoviedb.org/3/search/movie?api_key=1c36628b5c5648a1e1079924b98c0925&search_type=ngram&query=%QUERY'
+		,	rateLimitWait: 1000
+		,	filter: function (data) {
+				var add_movie_map = $.map(data.results, function (v) {
+					var classed = ''
+					if (v.poster_path === null) classed = 'invisible'
+					if ($.inArray(v.id, movie_arr) >= 0) return null
+					if (v.release_date == '') return null
+					return { tmdb_title: v.title, tokens: v.title.split(' '), tmdb_movie_id: v.id, tmdb_original_title: v.original_title, tmdb_poster_path: v.poster_path, tmdb_release_date: v.release_date, tmdb_release_date_abbr: v.release_date.substr(0, 4), classed: classed }
+				})
+				return add_movie_map
+			}
+		}
+	})
+	
+	taAddMovie.initialize()
+	
+	$('#add_movie').typeahead('destroy')
+	$('#add_movie').typeahead(null, {
+		name: 'taAddMovie'
+	,	displayKey: 'tmdb_title'
+	,	source: taAddMovie.ttAdapter()
+	,	templates: {
+			suggestion: Handlebars.compile(template)
+		}
+	})
+	
+	// Remove anything that's in the 'add a movie' / 'search my collection' inputs after clicking off of them.
+	$('#add_movie').off('blur')
+	$('#add_movie').on('blur', function () {
+		$(this).typeahead('val', '')
+		$(this).typeahead('close')
+	})
+
+	$('#add_movie').off('typeahead:selected')
+	$('#add_movie').on('typeahead:selected', function (e, o, name) {
+		$('#add_movie').off('blur')
+		$('#add_movie').typeahead('val', '')
+		$.ajax({
+			type: 'POST'
+		,	url: 'add_movie.php'
+		,	data: { movie_list_id: currentList, tmdb_movie_id: o.tmdb_movie_id, tmdb_title: o.tmdb_title, tmdb_original_title: o.tmdb_original_title, tmdb_poster_path: o.tmdb_poster_path, tmdb_release_date: o.tmdb_release_date }
+		})
+		.done(function (msg) {
+			//console.log(msg) // Useful for debugging
+			var code = +msg
+			//if (isNaN(code) === true) {
+			//	$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong!</div>')
+			//	return
+			//}
+			switch (code) {
+				case 1:
+					$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully added <abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">movie</abbr>!</div>')
+					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
+					addMovie(currentList, o.tmdb_movie_id, o.tmdb_title, o.tmdb_original_title, o.tmdb_poster_path, o.tmdb_release_date)
+					db[currentListPos].display_log = 0
+					displayTable()
+					enableAddMovie(template)
+					enableSearchCollection(template)
+					break
+				case 2:
+					$('#main-alerts').append('<div class="alert alert-warning"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Movie already exists in your collection!</div>')
+					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 10000)
+					break
+				default:
+					$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong! error[' + code + ']</div>')
+			}
+		})
+	})
+}
+
 function enableSearchCollection (template) {
+	//console.log('enabling search collection')
 	// SEARCH COLLECTION FOR MOVIE
 	if (db.length > 0) {
 		var taObjs = []
@@ -270,8 +358,15 @@ function enableSearchCollection (template) {
 		$('#search_collection').typeahead('destroy')
 		$('#search_collection').typeahead(null, taObjs)
 	}
+	$('#search_collection').off('typeahead:selected')
 	$('#search_collection').on('typeahead:selected', function (e, o, name) {
 		$('#dialog').modal({ remote: 'dialog.php?id=' + o.tmdb_movie_id })
+	})
+	// Remove anything that's in the 'add a movie' / 'search my collection' inputs after clicking off of them.
+	$('#search_collection').off('blur')
+	$('#search_collection').on('blur', function () {
+		$(this).typeahead('val', '')
+		$(this).typeahead('close')
 	})
 	$('#list-control .tt-hint').addClass('form-control')
 }
@@ -300,7 +395,7 @@ function enableFunctions () {
 			//console.time('modal exec time')
 			$('#dialog').modal({ remote: 'dialog.php?id=' + movie_id })
 			//console.timeEnd('modal exec time')
-		});
+		})
 }
 
 $(function () {
@@ -320,7 +415,7 @@ $(function () {
 				//console.log('renaming')
 				$(this).addClass('disabled')
 				//console.log($('#rename-list_name').val())
-				var list_description = ''; // Haven't implemented this yet
+				var list_description = '' // Haven't implemented this yet
 				var rename_list_name = $('#rename-list_name').val()
 				if (rename_list_name === '') {
 					$('#rename-alerts').html('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>You must supply a valid list name.</div>')
@@ -346,7 +441,7 @@ $(function () {
 						else $('#rename-alerts').html('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong!</div>')
 					})
 				}
-			});
+			})
 		}
 		else if ($(this).attr('href') === '#import') {
 			$('#import-dialog').modal()
@@ -406,7 +501,7 @@ $(function () {
 				$('#import-tmdb_list_id').val('')
 			})
 		}
-	});
+	})
 	$('#sort-order a').click(function () {
 		if ($(this).parent().hasClass('disabled')) return
 		var href = $(this).attr('href')
@@ -429,67 +524,8 @@ $(function () {
 	var template = '<p><img class="img-thumbnail {{classed}}" src="' + base_url + 'w45{{tmdb_poster_path}}" alt="{{tmdb_title}}" width="55" height="78"><span><strong>{{tmdb_title}}</strong> <small>(<abbr title="{{tmdb_release_date}}">{{tmdb_release_date_abbr}}</abbr>)</small></span></p>'
 
 	// ADD MOVIE
-	var taAddMovie = new Bloodhound( {
-		datumTokenizer: function(d) { return Bloodhound.tokenizers.whitespace(d.tmdb_title) }
-	,	queryTokenizer: Bloodhound.tokenizers.whitespace
-	,	limit: 5
-	,	remote: {
-			url: 'http://api.themoviedb.org/3/search/movie?api_key=1c36628b5c5648a1e1079924b98c0925&search_type=ngram&query=%QUERY'
-		,	rateLimitWait: 1000
-		,	filter: function (data) {
-				var add_movie_map = $.map(data.results, function (v) {
-					var classed = ''
-					if (v.poster_path === null) classed = 'invisible'
-					return { tmdb_title: v.title, tokens: v.title.split(' '), tmdb_movie_id: v.id, tmdb_original_title: v.original_title, tmdb_poster_path: v.poster_path, tmdb_release_date: v.release_date, tmdb_release_date_abbr: v.release_date.substr(0, 4), classed: classed }
-				})
-				return add_movie_map
-			}
-		}
-	})
-	
-	taAddMovie.initialize()
-	
-	$('#add_movie').typeahead(null, {
-		name: 'taAddMovie'
-	,	displayKey: 'tmdb_title'
-	,	source: taAddMovie.ttAdapter()
-	,	templates: {
-			suggestion: Handlebars.compile(template)
-		}
-	})
-	
-	$('#add_movie').on('typeahead:selected', function (e, o, name) {
-		$.ajax({
-			type: 'POST'
-		,	url: 'add_movie.php'
-		,	data: { movie_list_id: currentList, tmdb_movie_id: o.tmdb_movie_id, tmdb_title: o.tmdb_title, tmdb_original_title: o.tmdb_original_title, tmdb_poster_path: o.tmdb_poster_path, tmdb_release_date: o.tmdb_release_date }
-		})
-		.done(function (msg) {
-			//console.log(msg) // Useful for debugging
-			var code = +msg
-			//if (isNaN(code) === true) {
-			//	$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong!</div>')
-			//	return
-			//}
-			switch (code) {
-				case 1:
-					$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully added <abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">movie</abbr>!</div>')
-					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
-					addMovie(currentList, o.tmdb_movie_id, o.tmdb_title, o.tmdb_original_title, o.tmdb_poster_path, o.tmdb_release_date)
-					db[currentListPos].display_log = 0
-					displayTable()
-					enableSearchCollection(template)
-					break;
-				case 2:
-					$('#main-alerts').append('<div class="alert alert-warning"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Movie already exists in your collection!</div>')
-					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 10000)
-					break;
-				default:
-					$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong! error[' + code + ']</div>')
-			}
-		})
-	})
-	
+	enableAddMovie(template)
+
 	// SEARCH COLLECTION FOR MOVIE
 	enableSearchCollection(template)
 
@@ -698,7 +734,7 @@ $(function () {
 		//console.log('creating')
 		$(this).addClass('disabled')
 		//console.log($('#create-list_name').val())
-		var list_description = ''; // Haven't implemented this yet
+		var list_description = '' // Haven't implemented this yet
 		var create_list_name = $('#create-list_name').val()
 		if (create_list_name === '') {
 			$('#create-alerts').html('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>You must supply a valid list name.</div>')
@@ -725,7 +761,7 @@ $(function () {
 				$('#create-list_name').val('')
 			})
 		}
-	});
+	})
 
 	// For both #add-movie and #search-collection to make hint's style similar to the existing input
 	$('#list-control .tt-hint').addClass('form-control')
@@ -734,9 +770,20 @@ $(function () {
 		//console.log('hidden')
 		$(this).removeData('bs.modal')
 		$('#dialog').find('.modal-content').empty()
-	}).on('loaded.bs.modal', function() {
+	}).on('loaded.bs.modal', function(e) {
 		//console.timeEnd('modal exec time')
 		//console.log('loaded')
+
+		var list_id, movie_id = $('#dialog #movie-id').html()
+		$.each(db, function (i, e) {
+			$.each(e.movie_details, function (i, f) {
+				if (movie_id === f.movie_id) {
+					list_id = e.list_id
+					return
+				}
+			})
+		})
+ 
 		// Generate Overview popover
 		$('#overview').on('click', function () {
 			//console.log('test')
@@ -750,7 +797,7 @@ $(function () {
 		movie_options_html += '<li class="divider"></li><li class="dropdown-header">Move to...</li>'
 		$.each(db, function(i, v) {
 			movie_options_html += '<li'
-			if (db[currentListPos].list_id === v.list_id) movie_options_html += ' class="disabled"'
+			if (list_id === v.list_id) movie_options_html += ' class="disabled"'
 			movie_options_html += '><a href="#' + v.list_id + '">' + v.list_name + '</a></li>'
 		})
 		$('#movie-options').append(movie_options_html)
@@ -758,10 +805,9 @@ $(function () {
 		$('#movie-options a').on('click', function (e) {
 			e.preventDefault()
 			if ($(this).parent().hasClass('disabled')) return false
-			var movie_id = $('#dialog #movie-id').html()
 			if ($(this).attr('href').substr(1) === 'delete') {
 				$('#dialog .modal-body').hide(400)
-				$('#dialog .modal-body').after('<div class="alert alert-danger" style="margin:20px" id="delete-alert"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button><p>Are you <strong>sure</strong> you want to <strong>delete</strong> this movie from your "' + db[currentListPos].list_name + '" list?</p><p><button class="btn btn-danger" type="button" id="delete-yes">Yes</button> <button class="btn btn-default" type="button" id="delete-no">No, I do not want to</button></p></div>')
+				$('#dialog .modal-body').after('<div class="alert alert-danger" style="margin:20px" id="delete-alert"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button><p>Are you <strong>sure</strong> you want to <strong>delete</strong> this movie from your "' + db[listPos(list_id)].list_name + '" list?</p><p><button class="btn btn-danger" type="button" id="delete-yes">Yes</button> <button class="btn btn-default" type="button" id="delete-no">No, I do not want to</button></p></div>')
 				$('#delete-no').on('click', function () {
 					$('#dialog .modal-body').show(400)
 					$('#delete-alert').remove()
@@ -770,7 +816,7 @@ $(function () {
 					$.ajax({
 						type: 'POST'
 					,	url: 'delete_movie.php'
-					,	data: { movie_list_id: currentList, tmdb_movie_id: movie_id }
+					,	data: { movie_list_id: list_id, tmdb_movie_id: movie_id }
 					})
 					.done(function (msg) {
 						//console.log(msg) // Useful for debugging
@@ -778,10 +824,11 @@ $(function () {
 							$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully deleted movie!</div>')
 							window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
 							//db = JSON.parse(msg.substr(12))
-							deleteMovie(currentList, movie_id)
+							deleteMovie(list_id, movie_id)
 							$('#dialog').modal('hide')
-							db[currentListPos].display_log = 0
+							db[listPos(list_id)].display_log = 0
 							displayTable()
+							enableAddMovie(template)
 							enableSearchCollection(template)
 						}
 						else {
@@ -796,17 +843,18 @@ $(function () {
 			$.ajax({
 				type: 'POST'
 			,	url: 'move.php' // move.php is where we handle the actual movement of movie between TMDb lists
-			,	data: { from_list: currentList, to_list: toList, movie_id: movie_id }
+			,	data: { from_list: list_id, to_list: toList, movie_id: movie_id }
 			})
 			.done(function (msg) {
 				//console.log(msg) // Useful for debugging move.php
-				moveMovie(currentList, toList, movie_id)
+				moveMovie(list_id, toList, movie_id)
 				$('#dialog').modal('hide')
 				displayTable()
-				db[currentListPos].display_log = 0
+				db[listPos(list_id)].display_log = 0
 				db[listPos(toList)].display_log = 0
+				enableAddMovie(template)
 				enableSearchCollection(template)
 			})
 		})
 	})
-});
+})
