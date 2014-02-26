@@ -1,3 +1,14 @@
+var alertNum = 0
+function displayAlert (msg, color, timeout) {
+	if (timeout === undefined) timeout = 5000
+	$('#main-alerts').append('<div class="alert alert-' + color + '" id="alert' + alertNum + '"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>' + msg + '</div>')
+	if (timeout >= 0) {
+		var tmp = alertNum
+		window.setTimeout(function () { $('#alert' + tmp).hide(400, function () { this.remove() }) }, timeout)
+	}
+	alertNum++
+}
+
 // This function actually displays the table of movies depending on which table we want to display
 function displayTable () {
 	//console.log('displaying table')
@@ -304,8 +315,7 @@ function enableAddMovie (template) {
 			//}
 			switch (code) {
 				case 1:
-					$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully added <abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">movie</abbr>!</div>')
-					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
+					displayAlert('Successfully added <abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">movie</abbr>!', 'success')
 					addMovie(currentList, o.tmdb_movie_id, o.tmdb_title, o.tmdb_original_title, o.tmdb_poster_path, o.tmdb_release_date)
 					db[currentListPos].display_log = 0
 					displayTable()
@@ -313,11 +323,10 @@ function enableAddMovie (template) {
 					enableSearchCollection(template)
 					break
 				case 2:
-					$('#main-alerts').append('<div class="alert alert-warning"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Movie already exists in your collection!</div>')
-					window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 10000)
+					displayAlert('<abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">Movie</abbr> already exists in your collection!', 'warning', 10000)
 					break
 				default:
-					$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong! error[' + code + ']</div>')
+					displayAlert('Something went wrong! error[' + code + ']', 'danger', 0)
 			}
 		})
 	})
@@ -377,12 +386,17 @@ function enableFunctions () {
 	
 	$('#' + currentList + ' img.lazy').lazyload({ threshold: 200 })
 	
+	var pageX, pageY
 	$('#' + currentList + ' img')
 		.mousemove(function (e) {
+			$(e.target).popover('show')
+			pageX = e.pageX
+			pageY = e.pageY
 			// from e you can get the pageX(left position) and pageY(top position)
-			$('.popover').css({ 'left' : e.pageX + 15, 'top' : e.pageY - 10 })
+			$('.popover').css({ 'left' : pageX + 15, 'top' : pageY - 10 })
+			.mouseover(function () { $(this).css('display', 'none') }) // 
 		})
-		.mouseout(function () { 
+		.mouseout(function () {
 			$('.popover').css('display', 'none')
 		})
 		.popover({ // This code chunk turns the tooltip into what the image's alt attr has as its value.
@@ -395,6 +409,13 @@ function enableFunctions () {
 			//console.time('modal exec time')
 			$('#dialog').modal({ remote: 'dialog.php?id=' + movie_id })
 			//console.timeEnd('modal exec time')
+		})
+		.on('hidden.bs.popover', function () {
+			// This function is here because BootStrap's popover widget is buggy,
+			// that is, if I hover over the .popover while moving my mouse, it mistakenly closes the popover
+			if ($(this).is(':hover')) {
+				$(this).popover('show').on('shown.bs.popover', function (e) { $('.popover').css({ 'left' : pageX + 15, 'top' : pageY - 10 } )})
+			}
 		})
 }
 
@@ -416,10 +437,11 @@ $(function () {
 				$(this).addClass('disabled')
 				//console.log($('#rename-list_name').val())
 				var list_description = '' // Haven't implemented this yet
+				var old_list_name = db[currentListPos].list_name
 				var rename_list_name = $('#rename-list_name').val()
 				if (rename_list_name === '') {
 					$('#rename-alerts').html('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>You must supply a valid list name.</div>')
-						that.removeClass('disabled')
+					that.removeClass('disabled')
 				}
 				else {
 					var that = $(this)
@@ -434,7 +456,7 @@ $(function () {
 						that.removeClass('disabled')
 						$('#rename-list_name').val('')
 						if (msg.substr(0, 12) === 'greatsuccess') {
-							$('#main-alerts').html('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully renamed list!</div>')
+							displayAlert('Successfully renamed <abbr title="&quot;' + old_list_name + '&quot; to &quot;' + rename_list_name + '&quot;">list</abbr>!', 'success', 10000)
 							renameList(currentList, rename_list_name)
 							$('#rename-dialog').modal('hide')
 						}
@@ -458,12 +480,11 @@ $(function () {
 					//console.log(msg) // Useful for debugging
 					if (msg.substr(0, 12) === 'greatsuccess') {
 						//console.log(currentList)
-						$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully deleted list!</div>')
-						window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
+						displayAlert('Successfully deleted <abbr title="&quot;' + db[currentListPos].list_name + '&quot;">list</abbr>!', 'success', 10000)
 						deleteList(currentList)
 					}
 					else {
-						$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong while trying to delete your list!</div>')
+						displayAlert('Something went wrong while trying to delete your <abbr title="&quot;' + db[currentListPos].list_name + '&quot;">list</abbr>!', 'danger', 0)
 					}
 					$('#list-delete-yes').off('click')
 					$('#delete-dialog').modal('hide')
@@ -631,12 +652,11 @@ $(function () {
 				.done(function (msg) {
 					//console.log(msg) // Useful for debugging
 					if (msg.substr(0, 12) === 'greatsuccess') {
-						$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully adjusted lists!</div>')
-						window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
+						displayAlert('Successfully adjusted lists!', 'success')
 						adjustLists(stop_state)
 					}
 					else {
-						$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong while adjusting your lists!</div>')
+						displayAlert('Something went wrong while adjusting your lists!', 'danger', 0)
 					}
 					$('#adjust-dialog').modal('hide')
 				})
@@ -716,12 +736,11 @@ $(function () {
 				.done(function (msg) {
 					//console.log(msg) // Useful for debugging
 					if (msg.substr(0, 12) === 'greatsuccess') {
-						$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully saved public list settings!</div>')
-						window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
+						displayAlert('Successfully saved public list settings!', 'success')
 						$.each(stop_state, function (i, e) { db[i].share = e })
 					}
 					else {
-						$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong while saving your lists!</div>')
+						displayAlert('Something went wrong while saving your lists!', 'danger', 0)
 					}
 					$('#share-dialog').modal('hide')
 				})
@@ -821,8 +840,7 @@ $(function () {
 					.done(function (msg) {
 						//console.log(msg) // Useful for debugging
 						if (msg.substr(0, 12) === 'greatsuccess') {
-							$('#main-alerts').append('<div class="alert alert-success"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Successfully deleted movie!</div>')
-							window.setTimeout(function () { $('#main-alerts div:last-child').hide(400, function () { this.remove() }) }, 5000)
+							displayAlert('Successfully deleted <abbr title="' + $.grep(db[listPos(list_id)].movie_details, function (e) { if (e.movie_id === movie_id) return true })[0].original_title + '">movie</abbr>!', 'success', 10000)
 							//db = JSON.parse(msg.substr(12))
 							deleteMovie(list_id, movie_id)
 							$('#dialog').modal('hide')
@@ -832,7 +850,7 @@ $(function () {
 							enableSearchCollection(template)
 						}
 						else {
-							$('#main-alerts').append('<div class="alert alert-danger"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Something went wrong!</div>')
+							displayAlert('Something went wrong!', 'danger', 0)
 						}
 					})
 				})
