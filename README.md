@@ -24,5 +24,7 @@ With DVDs being so small, the novelty of owning a movie, and the ever growing nu
 
 ## Important Details
 You cannot see the structure of the database nor the configuration file used in this project.
+
 The database structure was exported from PHPMyAdmin into the file `/.your_database.sql`.  Please edit it to change "your_database" to the name of the database you are going to use before importing it into your own.  Remember to delete this file after importing it!
+
 The configuration file would normally be located at `/inc/config/config.php`.  However, I had Git ignore it since it has sensitive information within.  Therefore, I included a `/inc/config/sample_config.php` so you can just rename it to `config.php` then change the appropriate information within the file.
