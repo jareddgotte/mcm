@@ -1,0 +1,2 @@
+# Prevent direct access to PHP files in this directory
+RedirectMatch 404 \.php$
