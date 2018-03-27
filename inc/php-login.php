@@ -1,10 +1,10 @@
 <?php
 
 /**
- * Check PHP prerequisites and load common variables, libraries, classes 
+ * Check PHP prerequisites and load common variables, libraries, classes
  * and functions necessary for php-login script to work properly.
  */
- 
+
 // checking for minimum PHP version
 if (version_compare(PHP_VERSION, '5.3.7', '<')) {
 	exit('Sorry, Simple PHP Login does not run on a PHP version smaller than 5.3.7 !');
@@ -21,7 +21,7 @@ require_once('config/config.php');
 require_once('libs/PHPMailer.php');
 
 // detection of the language for the current user
-$user_lang = substr($_SERVER['HTTP_ACCEPT_LANGUAGE'], 0, 2);
+$user_lang = (isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? substr($_SERVER['HTTP_ACCEPT_LANGUAGE'], 0, 2) : 'en');
 // if translation file for the specified language doesn't exist, we use default english file
 if (!file_exists('lang/' . $user_lang . '.php')) {
 	$user_lang = 'en';
