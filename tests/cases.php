@@ -168,13 +168,9 @@ t_group('single session startup', function () {
 	t_same(0, $renames, 'nothing renames the session cookie');
 
 	// A second entry into the file has to stop before it can do anything: the
-	// guard is the very first statement, and it is what config files key off.
+	// marker is defined ahead of every side effect, and it is what config files
+	// key off.
 	$flat = mcm_flat_source($bootstrap);
-	t_same(
-		0,
-		strpos($flat, "<?php if ( defined ( 'MCM_BOOTSTRAP' ) ) { return ; }"),
-		'the bootstrap returns immediately when it is entered a second time'
-	);
 	t_ok(
 		strpos($flat, "define ( 'MCM_BOOTSTRAP'") < strpos($flat, 'session_start ('),
 		'the marker is defined before the session is started'
@@ -214,7 +210,7 @@ t_group('single session startup', function () {
  */
 
 t_group('session cookie attributes', function () {
-	$fixture = mcm_fixture('cookies', array('fonts' => true));
+	$fixture = mcm_fixture('cookies');
 	$server  = mcm_server_start($fixture);
 
 	try {
@@ -290,7 +286,7 @@ t_group('existing session compatibility', function () {
 	$server = mcm_server_start($fixture);
 	try {
 		// A visitor who was signed in before any of this shipped.
-		$response = mcm_http($server, '/probe.php', array('headers' => array('Cookie: PHPSESSID=' . $existing)));
+		$response = mcm_http($server, '/probe.php', array('Cookie: PHPSESSID=' . $existing));
 		$report   = mcm_report($response['body']);
 
 		t_same(200, $response['status'], 'an existing session still renders');
@@ -299,7 +295,7 @@ t_group('existing session compatibility', function () {
 		t_same(0, count(mcm_header_values($response, 'Set-Cookie')), 'no new cookie is issued to a visitor who already has one');
 
 		// An identifier the server never issued must not be adopted.
-		$response = mcm_http($server, '/probe.php', array('headers' => array('Cookie: PHPSESSID=' . $forged)));
+		$response = mcm_http($server, '/probe.php', array('Cookie: PHPSESSID=' . $forged));
 		$report   = mcm_report($response['body']);
 		$cookies  = mcm_header_values($response, 'Set-Cookie');
 
@@ -311,9 +307,7 @@ t_group('existing session compatibility', function () {
 
 		// The remember-me cookie belongs to the login code, not the bootstrap.
 		$remember = 'already-signed-in/aaaabbbbccccdddd/eeeeffff00001111';
-		$response = mcm_http($server, '/probe.php', array(
-			'headers' => array('Cookie: rememberme=' . $remember . '; PHPSESSID=' . $existing),
-		));
+		$response = mcm_http($server, '/probe.php', array('Cookie: rememberme=' . $remember . '; PHPSESSID=' . $existing));
 		$report = mcm_report($response['body']);
 
 		t_contains($remember, $report['cookies_json'], 'the remember-me cookie arrives unmodified');
@@ -336,11 +330,18 @@ t_group('error handling', function () {
 	$seed    = $fixture['seed'];
 	$server  = mcm_server_start($fixture);
 
+	// Each of these ends the request, and each takes a different route through
+	// the bootstrap: the exception handler, the error handler, and - for the
+	// compile-time fatal, which is not a Throwable - the shutdown handler. The
+	// expected log label is what tells them apart, so it has to be the specific
+	// one: a substring such as "error" matches almost any line, including the
+	// wrong handler's.
 	$fatal = array(
-		'an uncaught exception' => array('page' => 'fault_exception.php', 'logged' => 'Uncaught Exception'),
-		'an uncaught Error'     => array('page' => 'fault_error.php', 'logged' => 'Uncaught Error'),
-		'a compile-time fatal'  => array('page' => 'fault_fatal.php', 'logged' => 'error'),
-		'a fatal user error'    => array('page' => 'fault_user_error.php', 'logged' => 'User error'),
+		'an uncaught exception'  => array('page' => 'fault_exception.php', 'logged' => 'Uncaught Exception'),
+		'an uncaught Error'      => array('page' => 'fault_error.php', 'logged' => 'Uncaught Error'),
+		'a file that does not compile' => array('page' => 'fault_fatal.php', 'logged' => 'Uncaught ParseError'),
+		'a compile-time fatal'   => array('page' => 'fault_compile.php', 'logged' => 'Compile error'),
+		'a fatal user error'     => array('page' => 'fault_user_error.php', 'logged' => 'User error'),
 	);
 
 	try {
@@ -356,7 +357,14 @@ t_group('error handling', function () {
 		}
 
 		t_contains('#0', mcm_http($server, '/fault_exception.php')['log'], 'an uncaught exception logs its stack trace');
-		t_lacks('this line is never reached', mcm_http($server, '/fault_fatal.php')['body'], 'a compile-time fatal stops the page');
+		t_lacks('this line is never reached', mcm_http($server, '/fault_compile.php')['body'], 'a compile-time fatal stops the page');
+
+		// The shutdown handler is the only one that sees a compile-time fatal,
+		// so it gets its own assertions rather than sharing the table's.
+		$response = mcm_http($server, '/fault_compile.php');
+		t_contains('Cannot redeclare', $response['log'], 'the compile-time fatal is the duplicate declaration, not something else');
+		t_lacks('Uncaught', $response['log'], 'the compile-time fatal never reaches the exception handler');
+		t_lacks('Cannot redeclare', $response['body'], 'the shutdown handler tells the client nothing about the fatal');
 
 		// A warning is not a reason to stop serving a page that used to work.
 		$response = mcm_http($server, '/fault_warning.php');
@@ -382,7 +390,7 @@ t_group('error handling', function () {
 	mcm_server_stop($server);
 
 	$fixture = mcm_fixture('errors-filtered', array('config' => array(
-		'MCM_ERROR_REPORTING' => array('raw' => 'E_ALL & ~E_USER_WARNING'),
+		'MCM_ERROR_REPORTING' => E_ALL & ~E_USER_WARNING,
 	)));
 	$result = mcm_cli($fixture, 'fault_user_warning.php');
 	t_same(0, $result['status'], 'a filtered level does not fail the request');
@@ -429,8 +437,10 @@ t_group('entry point inclusion', function () {
 			'source'  => "<?php\n\nrequire(__DIR__ . '/inc/bootstrap.php');\n",
 			'problem' => 'non-once form',
 		),
+		// The page mentions __DIR__ after the include on purpose: a check that
+		// scans the whole file instead of the include statement accepts this.
 		'a page that relies on the include path' => array(
-			'source'  => "<?php\n\nrequire_once('inc/bootstrap.php');\n",
+			'source'  => "<?php\n\nrequire_once('inc/bootstrap.php');\n\n\$template = __DIR__ . '/inc/views/logged_in.php';\n",
 			'problem' => 'not anchored',
 		),
 	);

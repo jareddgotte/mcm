@@ -1,8 +1,10 @@
 <?php
 
-// A true compile-time fatal: the required file does not parse, so the failure
-// never reaches the error handler and only the shutdown handler can see it. The
-// file name carries the seeded secret, so the message proves where detail went.
+// A file that does not compile. PHP 7 and later raise this as a ParseError,
+// which is a Throwable, so it reaches the exception handler rather than the
+// shutdown handler - see fault_compile.php for the shutdown handler's own case.
+// The file name carries the seeded secret, so the message proves where detail
+// went.
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/_seed.php');
 

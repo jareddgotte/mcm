@@ -22,7 +22,18 @@ the application. Setup is documented in `README.md`.
   copied into a fixture or the captcha logs a font warning.
 - Failures that only a whole-source view can catch are static checks over
   `token_get_all()` in `tests/entrypoints.php`; comments are stripped first, so
-  prose mentioning a call is not mistaken for one.
+  prose mentioning a call is not mistaken for one, and per-statement facts are
+  read from the statement's own tokens, never from the rest of the file.
+- Which handler sees a fatal is not obvious and decides what a case proves. A
+  file that does not parse raises a `ParseError`, which is a `Throwable` and
+  goes to the exception handler. Only a genuine compile-time fatal - a
+  duplicate declaration, as in `tests/pages/fault_compile.php` - reaches
+  `mcm_shutdown_handler()`. A "fatal" case built on a parse error leaves the
+  shutdown handler untested.
+- The suite is developer-only and its PHP floor is independent of the site's:
+  it is run and verified on PHP 8.1 and 8.4.
+- When changing the harness, re-run the mutation sweep rather than trusting a
+  green run: an assertion that cannot fail still passes.
 
 ## Request lifecycle
 
