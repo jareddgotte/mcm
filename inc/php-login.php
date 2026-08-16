@@ -14,14 +14,10 @@ if (version_compare(PHP_VERSION, '5.3.7', '<')) {
 	require_once('libs/password_compatibility_library.php');
 }
 
-// include the config
-// MCM_BOOTSTRAP marks a legitimate application bootstrap. Config files check
-// for it so that a direct web request to a config file cannot execute
-// meaningfully; defining it here has no other effect.
-if (!defined('MCM_BOOTSTRAP')) {
-	define('MCM_BOOTSTRAP', true);
-}
-require_once('config/config.php');
+// Configuration, error handling and the session all come from the shared
+// bootstrap, which every public entry point already includes. Requiring it
+// again here is a no-op, and keeps this file usable on its own.
+require_once(dirname(__FILE__) . '/bootstrap.php');
 
 // include the PHPMailer library
 require_once('libs/PHPMailer.php');

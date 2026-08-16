@@ -2,8 +2,8 @@
 
 // import TMDb list into my db
 
+require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
-session_start();
 $errors = array();
 
 $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');

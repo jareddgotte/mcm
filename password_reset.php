@@ -17,6 +17,7 @@
  */
 
 // load php-login components
+require_once(__DIR__ . '/inc/bootstrap.php');
 require_once("inc/php-login.php");
 
 // create a login object. when this object is created, it will do all login/logout stuff automatically

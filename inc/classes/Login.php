@@ -64,8 +64,8 @@ class Login
      */
     public function __construct()
     {
-        // create/read session
-        session_start();
+        // The session is already open: inc/bootstrap.php starts it, once, for
+        // every entry point before any of this code runs.
 
         // TODO: organize this stuff better and make the constructor very small
         // TODO: unite Login and Registration classes ?

@@ -40,7 +40,8 @@ class Registration
      */    
     public function __construct()
     {
-        session_start();
+        // The session is already open: inc/bootstrap.php starts it, once, for
+        // every entry point before any of this code runs.
 
         // Create internal reference to global array with translation of language strings
         $this->lang = & $GLOBALS['phplogin_lang'];

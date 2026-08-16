@@ -11,12 +11,14 @@
  * if ($_POST["captcha"] == $_SESSION['captcha']) { ... } else { ... }
  */
 
+// This file is requested directly by the browser, so it is a public entry
+// point of its own and loads the shared bootstrap first.
+require_once(dirname(__FILE__) . '/bootstrap.php');
+
 // check if php gd extension is loaded
 if (!extension_loaded('gd')) {
 	die("It looks like GD is not installed");
 }
-
-session_start();
 
 // target captcha string length
 $iCaptchaLength = 4;
