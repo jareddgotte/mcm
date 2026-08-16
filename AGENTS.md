@@ -5,8 +5,24 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## What this project is
 
 A legacy PHP movie-collection manager built on the php-login script. There is no
-dependency manager, no build step and no test suite; the `.php` files in the
-document root are the application. Setup is documented in `README.md`.
+dependency manager and no build step; the `.php` files in the document root are
+the application. Setup is documented in `README.md`.
+
+## Tests
+
+- `php tests/run.php` runs everything; `--filter=<text>` runs one group. The
+  suite covers `inc/bootstrap.php` and needs only a PHP CLI - no package
+  manager, no framework, no database. Keep it that way.
+- Each case builds a throw-away copy of the site under the system temp
+  directory and drives it as a child process or through PHP's built-in server,
+  so runs never touch the checkout or a real configuration.
+- Two traps the harness already works around, documented at their call sites in
+  `tests/run.php`: the built-in server command must be prefixed with `exec` or
+  terminating it orphans the server and hangs the suite, and `fonts/` has to be
+  copied into a fixture or the captcha logs a font warning.
+- Failures that only a whole-source view can catch are static checks over
+  `token_get_all()` in `tests/entrypoints.php`; comments are stripped first, so
+  prose mentioning a call is not mistaken for one.
 
 ## Request lifecycle
 
@@ -18,8 +34,8 @@ document root are the application. Setup is documented in `README.md`.
 - Public entry points are every `*.php` in the document root plus
   `inc/showCaptcha.php`, which the browser requests directly for the
   registration captcha. A new entry point must include the bootstrap.
-- `session_start()` must exist in exactly one place. `grep -rn "session_start("
-  --include="*.php" .` is the check.
+- `session_start()` must exist in exactly one place, and every entry point must
+  load the bootstrap first. Both are asserted by `php tests/run.php`.
 - The session cookie name stays at the server default. Renaming it would sign
   out every visitor of the live site.
 - Configuration is layered: `inc/config/config.php` (untracked, real values)
