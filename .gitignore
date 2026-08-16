@@ -1,0 +1,18 @@
+# Private runtime configuration. Real values are never part of this
+# repository; only inc/config/example_config.php (placeholders) is committed.
+inc/config/config.php
+
+# Database schema dump used during first-time setup. The copy in this
+# repository stays tracked on purpose (see README.md); any additional local
+# copy an operator edits with real database details must never be committed.
+.your_database.sql
+
+# Generated / third-party artifacts
+/vendor/
+/var/
+
+# Logs
+*.log
+
+# Environment files
+.env*

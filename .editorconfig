@@ -1,0 +1,19 @@
+# Matches the conventions already used by this project's own source files.
+# See https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = tab
+insert_final_newline = true
+
+[*.{php,js,css}]
+indent_style = tab
+indent_size = 4
+
+[*.md]
+indent_style = space
+indent_size = 2
+# Markdown uses trailing double spaces for hard line breaks.
+trim_trailing_whitespace = false
