@@ -1,5 +1,16 @@
 <?php
 
+/**
+ * Guard against this file being executed by a direct web request.
+ * MCM_BOOTSTRAP is defined by inc/php-login.php before the config is included,
+ * so a legitimate application bootstrap always passes. A direct hit on this
+ * file stops here even if a web-server access rule is missing on some host.
+ */
+if (!defined('MCM_BOOTSTRAP')) {
+	header('HTTP/1.0 403 Forbidden');
+	exit('Forbidden');
+}
+
 define("TMDB_API_KEY", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This key comes from TMDB
 define("TMDB_SESSION_ID", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This session comes from TMDB
 

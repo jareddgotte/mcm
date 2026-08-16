@@ -15,6 +15,12 @@ if (version_compare(PHP_VERSION, '5.3.7', '<')) {
 }
 
 // include the config
+// MCM_BOOTSTRAP marks a legitimate application bootstrap. Config files check
+// for it so that a direct web request to a config file cannot execute
+// meaningfully; defining it here has no other effect.
+if (!defined('MCM_BOOTSTRAP')) {
+	define('MCM_BOOTSTRAP', true);
+}
 require_once('config/config.php');
 
 // include the PHPMailer library

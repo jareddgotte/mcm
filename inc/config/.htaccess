@@ -1,0 +1,15 @@
+# Deny direct web access to configuration files. There is no exception here:
+# nothing in this directory is ever requested by a browser.
+# Both directive sets are present because the server's Apache version is not
+# known: 2.4+ uses mod_authz_core, older releases use mod_access_compat.
+<IfModule mod_authz_core.c>
+	Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+	Order allow,deny
+	Deny from all
+</IfModule>
+
+# Same fallback style already used by inc/views/.htaccess, in case neither
+# authorization module above is available.
+RedirectMatch 404 \.php$

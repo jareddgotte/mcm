@@ -23,8 +23,12 @@ With DVDs being so small, the novelty of owning a movie, and the ever growing nu
 - More features are in the works!
 
 ## Important Details
-You cannot see the structure of the database nor the configuration file used in this project.
+This repository contains a placeholder database schema and a placeholder configuration file.  The values actually used by the published site are not part of the repository.
 
-The database structure was exported from PHPMyAdmin into the file `/.your_database.sql`.  Please edit it to change "your_database" to the name of the database you are going to use before importing it into your own.  Remember to delete this file after importing it!
+### Setup
+1. **Import the database.**  The database structure was exported from PHPMyAdmin into the file `/.your_database.sql`.  Edit it to change "your_database" to the name of the database you are going to use, then import it into your own.  Remember to delete your edited copy after importing it!
+2. **Create the configuration file.**  Copy `/inc/config/example_config.php` to `/inc/config/config.php`, then change the appropriate information within the new file.  `config.php` is listed in `/.gitignore` so that your real credentials are never committed; `example_config.php` stays in the repository and must only ever contain placeholders.
 
-The configuration file would normally be located at `/inc/config/config.php`.  However, I had Git ignore it since it has sensitive information within.  Therefore, I included a `/inc/config/sample_config.php` so you can just rename it to `config.php` then change the appropriate information within the file.
+### Notes
+- The `/inc` directory is served-but-internal, so `/inc/.htaccess` and `/inc/config/.htaccess` deny direct web access to it.  The registration captcha at `/inc/showCaptcha.php` is the one deliberate exception, since the browser requests that image directly.
+- Config files check for the `MCM_BOOTSTRAP` constant, which is defined by `/inc/php-login.php` before the config is included.  This means a direct request to a config file stops immediately even if a web-server rule is missing.
