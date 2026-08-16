@@ -1,7 +1,6 @@
 <?php
 
-error_reporting(E_ALL ^ E_NOTICE);
-//ini_set('error_reporting', E_ALL);
+// Error reporting is set by inc/bootstrap.php from the configuration.
 
 // Jared Gotte
 // jareddgotte@gmail.com
@@ -46,6 +45,7 @@ $(document).ready(function(){
 	I can add the ability for users to login and organize their movies themselves.
 */
 
+require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
 
 $login = new Login();

@@ -2,8 +2,8 @@
 
 //$time1 = microtime(true) - $_SERVER["REQUEST_TIME_FLOAT"];
 
+require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
-session_start();
 
 
 if (!isset($_SESSION['tmdb_obj'])) {

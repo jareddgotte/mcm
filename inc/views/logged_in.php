@@ -5,7 +5,7 @@ header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
 
 // I primarily use sessions to reduce the amount of calls I make to TMDb, as well as maintaining a session
 // with TMDb so I can move movies from one list to another
-//session_start();
+// (the session itself is started by inc/bootstrap.php)
 
 if (!isset($_SESSION['db_lists'])) $_SESSION['db_lists'] = $db_lists;
 //if (!isset($_SESSION['session'])) $_SESSION['session'] = TMDB_SESSION_ID;

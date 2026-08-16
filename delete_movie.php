@@ -1,7 +1,7 @@
 <?php
 
+require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
-session_start();
 $errors = array();
 
 // Kill the script if someone got here improperly

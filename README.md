@@ -31,4 +31,5 @@ This repository contains a placeholder database schema and a placeholder configu
 
 ### Notes
 - The `/inc` directory is served-but-internal, so `/inc/.htaccess` and `/inc/config/.htaccess` deny direct web access to it.  The registration captcha at `/inc/showCaptcha.php` is the one deliberate exception, since the browser requests that image directly.
-- Config files check for the `MCM_BOOTSTRAP` constant, which is defined by `/inc/php-login.php` before the config is included.  This means a direct request to a config file stops immediately even if a web-server rule is missing.
+- Config files check for the `MCM_BOOTSTRAP` constant, which is defined by `/inc/bootstrap.php` before the config is included.  This means a direct request to a config file stops immediately even if a web-server rule is missing.
+- `/inc/bootstrap.php` is the shared application bootstrap.  Every public entry point includes it first and exactly once, and it is the single place that loads configuration, installs the error and exception handlers, and starts the session.  All of its own settings are optional and documented in `/inc/config/example_config.php`; leaving them out gives you the safe defaults.

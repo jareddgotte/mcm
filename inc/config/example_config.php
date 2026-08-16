@@ -2,7 +2,7 @@
 
 /**
  * Guard against this file being executed by a direct web request.
- * MCM_BOOTSTRAP is defined by inc/php-login.php before the config is included,
+ * MCM_BOOTSTRAP is defined by inc/bootstrap.php before the config is included,
  * so a legitimate application bootstrap always passes. A direct hit on this
  * file stops here even if a web-server access rule is missing on some host.
  */
@@ -131,3 +131,35 @@ define("EMAIL_VERIFICATION_CONTENT", "Please click on this link to activate your
 // the hash cost factor, PHP's internal default is 10. You can leave this line commented out until you need
 // another factor then 10.
 define("HASH_COST_FACTOR", "10");
+
+/**
+ * Configuration for: Error handling and session cookies
+ *
+ * Every setting below is OPTIONAL. inc/bootstrap.php applies a safe default
+ * for anything this file does not define, so an existing config.php keeps
+ * working untouched. Uncomment a line only when you want a different value
+ * from the default shown next to it.
+ *
+ * Note that the session cookie NAME is not configurable on purpose: it stays
+ * at the server default, because renaming it would sign out every visitor who
+ * currently has a session.
+ */
+
+/** which diagnostics get logged. They are never shown to visitors. */
+//define('MCM_ERROR_REPORTING', E_ALL & ~E_NOTICE);
+/** true prints PHP diagnostics into the page. Only ever useful locally. */
+//define('MCM_DISPLAY_ERRORS', false);
+/** whether diagnostics are written to the error log at all. */
+//define('MCM_LOG_ERRORS', true);
+/** absolute path to a private log file. Empty means "wherever PHP already logs". */
+//define('MCM_ERROR_LOG', '');
+/** the one line a visitor sees when a request fails. Keep it free of detail. */
+//define('MCM_GENERIC_ERROR_MESSAGE', 'Sorry, something went wrong. Please try again later.');
+/** session cookie lifetime in seconds. 0 means "until the browser closes". */
+//define('MCM_SESSION_COOKIE_LIFETIME', 0);
+/** path the session cookie is sent for. Use the site's sub-directory if it lives in one. */
+//define('MCM_SESSION_COOKIE_PATH', '/');
+/** SameSite attribute: 'Lax', 'Strict' or 'None'. Applied on PHP 7.3 and newer. */
+//define('MCM_SESSION_COOKIE_SAMESITE', 'Lax');
+/** true marks the session cookie HTTPS-only. Leave undefined to follow the current request. */
+//define('MCM_SESSION_COOKIE_SECURE', true);
