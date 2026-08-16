@@ -32,6 +32,13 @@ the application. Setup is documented in `README.md`.
   shutdown handler untested.
 - The suite is developer-only and its PHP floor is independent of the site's:
   it is run and verified on PHP 8.1 and 8.4.
+- Known, unfixed, and surfaced by the suite: on PHP 8.5 `imagefttext()` no
+  longer accepts a relative font path, so the captcha's
+  `'../fonts/times_new_yorker.ttf'` in `inc/showCaptcha.php` stops rendering
+  and logs a font warning. An absolute path still works. The suite is green on
+  8.1 and 8.4 and fails exactly this one assertion on 8.5; that failure is the
+  site's, not the harness's, and the assertion stays as it is until the captcha
+  is fixed.
 - When changing the harness, re-run the mutation sweep rather than trusting a
   green run: an assertion that cannot fail still passes.
 
