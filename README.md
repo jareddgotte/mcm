@@ -29,6 +29,9 @@ This repository contains a placeholder database schema and a placeholder configu
 1. **Import the database.**  The database structure was exported from PHPMyAdmin into the file `/.your_database.sql`.  Edit it to change "your_database" to the name of the database you are going to use, then import it into your own.  Remember to delete your edited copy after importing it!
 2. **Create the configuration file.**  Copy `/inc/config/example_config.php` to `/inc/config/config.php`, then change the appropriate information within the new file.  `config.php` is listed in `/.gitignore` so that your real credentials are never committed; `example_config.php` stays in the repository and must only ever contain placeholders.
 
+### Tests
+Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  Every case works on a throw-away copy of the site under the system temp directory, so running the suite never touches your checkout or your configuration.  Add `--filter=<text>` to run a single group.
+
 ### Notes
 - The `/inc` directory is served-but-internal, so `/inc/.htaccess` and `/inc/config/.htaccess` deny direct web access to it.  The registration captcha at `/inc/showCaptcha.php` is the one deliberate exception, since the browser requests that image directly.
 - Config files check for the `MCM_BOOTSTRAP` constant, which is defined by `/inc/bootstrap.php` before the config is included.  This means a direct request to a config file stops immediately even if a web-server rule is missing.
