@@ -24,6 +24,9 @@ the application. Setup is documented in `README.md`.
   `token_get_all()` in `tests/entrypoints.php`; comments are stripped first, so
   prose mentioning a call is not mistaken for one, and per-statement facts are
   read from the statement's own tokens, never from the rest of the file.
+  `mcm_method_calls()` narrows that to one method, which is how a fact about a
+  single code path - "this transition renews the session identifier" - is
+  asserted without the rest of the file being able to satisfy it.
 - Which handler sees a fatal is not obvious and decides what a case proves. A
   file that does not parse raises a `ParseError`, which is a `Throwable` and
   goes to the exception handler. Only a genuine compile-time fatal - a
@@ -62,6 +65,10 @@ the application. Setup is documented in `README.md`.
   wins, and the bootstrap fills in safe defaults for anything it omits.
   `inc/config/example_config.php` is tracked and must only ever hold
   placeholders. Config files refuse to run unless `MCM_BOOTSTRAP` is defined.
+- `inc/security.php`, loaded by the bootstrap, is where random tokens,
+  constant-time comparison, password hashing and session identifier renewal
+  live. Login and Registration call it rather than PHP's functions directly, so
+  a change to any of that has one place to happen in.
 
 ## Sharp edges
 
@@ -71,6 +78,13 @@ the application. Setup is documented in `README.md`.
   generic message. Do not add `echo $e->getMessage()` style output.
 - `inc/`, `inc/config/` and `inc/views/` carry `.htaccess` rules denying direct
   web access, with `inc/showCaptcha.php` as the one deliberate exception.
+- Token lengths are fixed by the columns that hold them (see `.your_database.sql`):
+  64 characters for `user_rememberme_token`, 40 for `user_activation_hash` and
+  `user_password_reset_hash`. A longer token is silently truncated on the way in
+  and then never matches.
+- The remember-me cookie is `user id : token : sha256(user id:token +
+  COOKIE_SECRET_KEY)`. Changing that formula, or the secret, invalidates every
+  remember-me cookie already in a browser.
 
 ## Maintaining this file
 
