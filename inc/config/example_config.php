@@ -178,7 +178,7 @@ define("HASH_COST_FACTOR", "10");
  *
  * TO SWITCH HTTPS ENFORCEMENT OFF: uncomment the MCM_FORCE_HTTPS line below and
  * set it to false. The site then serves plain HTTP again on the next request,
- * with no code change and nothing to re-upload beyond this file. The redirect
+ * with no code change and nothing else to change beyond this file. The redirect
  * is a temporary one for exactly this reason, so browsers do not remember it.
  * Note that the site does not send Strict-Transport-Security, which browsers
  * would remember for far longer.
