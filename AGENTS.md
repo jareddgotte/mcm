@@ -62,6 +62,17 @@ the application. Setup is documented in `README.md`.
   wins, and the bootstrap fills in safe defaults for anything it omits.
   `inc/config/example_config.php` is tracked and must only ever hold
   placeholders. Config files refuse to run unless `MCM_BOOTSTRAP` is defined.
+- Anything the server renders that it did not write itself - a list name, a
+  username, a TMDb string - is escaped for where it lands, by a helper in the
+  bootstrap: `mcm_html()` for HTML text and quoted attributes, `mcm_url()` for
+  one component of a URL, `mcm_js()` for a value inside a `<script>`. Picking by
+  habit rather than by destination is how this silently stops working.
+  `mcm_escaping_problems()` in `tests/entrypoints.php` fails the suite when a
+  page renders a request superglobal without one of them.
+- Escaping is rendering only. Stored values keep the exact bytes that were
+  submitted, and `mcm_list_name_error()` rejects a bad list name rather than
+  rewriting it, so a name that already contains markup keeps working.
+  Browser-side rendering (`js/mc.js`, `js/share.js`) is not covered yet.
 
 ## Sharp edges
 
