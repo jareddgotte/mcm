@@ -85,7 +85,20 @@ function mcm_positive_int($value)
 function mcm_log_detail($value)
 {
 	if (!is_string($value)) {
-		return is_scalar($value) ? gettype($value) . ' ' . var_export($value, true) : gettype($value);
+		if (is_bool($value)) {
+			return 'boolean ' . ($value ? 'true' : 'false');
+		}
+		if (is_null($value)) {
+			return 'null';
+		}
+		if (is_int($value)) {
+			return 'integer ' . $value;
+		}
+		if (is_float($value)) {
+			return 'double ' . $value;
+		}
+
+		return gettype($value);
 	}
 
 	$value = preg_replace('/[^\x20-\x7e]/', '?', $value);
