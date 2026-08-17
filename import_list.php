@@ -24,7 +24,8 @@ if (!isset($_SESSION['tmdb_obj'])) {
 //echo "importing list<br>\n";
 $ImportList = $_SESSION['tmdb_obj']->getList($tmdb_list_id);
 if (isset($ImportList['status_code'])) {
-	printf("Error: Status code: %s | Message: %s\n", $ImportList['status_code'], $ImportList['status_message']);
+	// Both values come straight from TMDb, so neither is rendered as markup.
+	printf("Error: Status code: %s | Message: %s\n", mcm_html($ImportList['status_code']), mcm_html($ImportList['status_message']));
 	//var_dump($ImportList);
 	exit();
 }
@@ -134,5 +135,7 @@ else {
 		}
 		$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 	}
-	echo json_encode($db_var);
+	// This response is served as HTML by default, so a list name or title with
+	// markup in it must not survive as markup on the way out.
+	echo mcm_js($db_var);
 }

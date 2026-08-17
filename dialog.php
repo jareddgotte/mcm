@@ -62,25 +62,29 @@ if (count($yt_trailers) > 0) {
 				</div>
 			</div>
 		';
-		$trailer_html .= sprintf($tmp, $k, $v['size'], $v['name'], $k, ($k == 0) ? ' in' : '',substr($v['source'], 0, (strpos($v['source'], '&') != FALSE) ? strpos($v['source'], '&') : strlen($v['source'])));
+		// Everything below the format string comes from TMDb: the labels are text,
+		// and the video id is a single path segment of the embed URL.
+		$trailer_html .= sprintf($tmp, (int) $k, mcm_html($v['size']), mcm_html($v['name']), (int) $k, ($k == 0) ? ' in' : '', mcm_url(substr($v['source'], 0, (strpos($v['source'], '&') != FALSE) ? strpos($v['source'], '&') : strlen($v['source']))));
 	}
 	$trailer_html .= '</div>';
 }
 else $trailer_html = '<div class="alert alert-warning"><strong>No trailer available.</strong></div>';
 
+// $genress is markup once it leaves this loop, so each name is escaped as it
+// goes in and the separator stays a literal separator.
 $genress = '';
 for ($i = 0; $i < count($genres); $i++) {
-	$genress .= $genres[$i]['name'];
+	$genress .= mcm_html($genres[$i]['name']);
 	if ($i + 1 < count($genres)) $genress .= ' | ';
 }
 
-echo '
+printf('
 			<div class="modal-header">
 				<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
-				<h4 class="modal-title" id="movie-title">' . $title . ' <small class="hide" id="movie-id">' . $movie_id . '</small></h4>
+				<h4 class="modal-title" id="movie-title">%s <small class="hide" id="movie-id">%s</small></h4>
 			</div>
 			<div class="modal-body">
-';
+', mcm_html($title), mcm_html($movie_id));
 $details = '
 	<div class="row">
 		<div class="col-xs-2" style="padding:0">
@@ -104,20 +108,30 @@ $details = '
 		</div>
 	</div>
 ';
-printf($details, $imdb, $runtime, date_format(date_create($release_date), 'F j, Y'), substr($release_date, 0, 4), $genress);
+// The IMDb id is one path segment of the link; the rest is text, and $genress
+// was escaped as it was assembled.
+printf($details, mcm_url($imdb), mcm_html($runtime), mcm_html(date_format(date_create($release_date), 'F j, Y')), mcm_html(substr($release_date, 0, 4)), $genress);
 
 echo $trailer_html;
-echo '<span><a href="https://www.youtube.com/results?search_query=' . str_replace(' ', '+', $title) . '+' . substr($release_date, 0, 4) . '+Trailer" target="_blank">Search for ' . ((count($yt_trailers) > 0) ? 'more trailers' : 'a trailer') . ' on YouTube.</a></span>';
-echo '
+// The title is a query-string value here rather than text, so it is encoded for
+// a URL instead of for HTML.
+printf(
+	'<span><a href="https://www.youtube.com/results?search_query=%s+%s+Trailer" target="_blank">Search for %s on YouTube.</a></span>',
+	mcm_url($title),
+	mcm_url(substr($release_date, 0, 4)),
+	(count($yt_trailers) > 0) ? 'more trailers' : 'a trailer'
+);
+printf('
 				<div class="panel panel-default" id="overview-content">
 					<div class="panel-heading">
 						<button class="close" aria-hidden="true" id="overview-content-close">&times;</button>
-						<h3 class="panel-title">' . $title . '</h3>
+						<h3 class="panel-title">%s</h3>
 					</div>
 					<div class="panel-body">
-						' . htmlentities($overview) . '
+						%s
 					</div>
-				</div>
+				</div>', mcm_html($title), mcm_html($overview));
+echo '
 			</div>
 			<div class="modal-footer">
 				<button class="btn btn-default pull-left" id="overview" type="button">Movie Overview</button>

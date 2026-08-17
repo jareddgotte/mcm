@@ -48,7 +48,9 @@ foreach ($movie_lists as $v) {
 	}
 	$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 }
-$db_var = json_encode($db_var);
+// mcm_js() keeps list names and TMDb titles from closing the script element
+// they are about to be embedded in.
+$db_var = mcm_js($db_var);
 //var_dump($movie_lists);
 
 // include html header and display php-login message/error
@@ -61,9 +63,9 @@ $script = "
 
 var db = " . $db_var . "
 //console.log(db)
-var base_url = '" . $base_url . "'
-var poster_size_big = '" . $poster_size . "'
-var poster_size_small = '" . $_SESSION['tmdb_config']['images']['poster_sizes'][0] . "'
+var base_url = " . mcm_js($base_url) . "
+var poster_size_big = " . mcm_js($poster_size) . "
+var poster_size_small = " . mcm_js($_SESSION['tmdb_config']['images']['poster_sizes'][0]) . "
 
 // Variables to record whether or not we've loaded the table yet or not.  This is to prevent multiple loadings of each table if we keep going back and forth between tabs
 //console.log(db.length)
@@ -120,8 +122,8 @@ if (isset($errors)) var_dump($errors);
 $list_tabs = '';
 $list_containers = '';
 foreach($movie_lists as $v) {
-	$list_tabs .= sprintf("<li data-listid=\"%s\"><a href=\"#%s\" data-toggle=\"pill\">%s</a></li>\n", $v[0], $v[0], $v[1]);
-	$list_containers .= sprintf("<div class=\"tab-pane\" id=\"%s\"></div>\n", $v[0]);
+	$list_tabs .= mcm_list_tab_html($v[0], $v[1]);
+	$list_containers .= mcm_list_pane_html($v[0]);
 }
 
 ?>

@@ -6,12 +6,12 @@ include('header.php');
 
 if ($login->errors) {
 	foreach ($login->errors as $error) {
-		printf("<div class=\"alert alert-danger\">%s</div>", $error);
+		printf("<div class=\"alert alert-danger\">%s</div>", mcm_html($error));
 	}
 }
 if ($login->messages) {
 	foreach ($login->messages as $message) {
-		printf("<div class=\"alert alert-info\">%s</div>", $message);
+		printf("<div class=\"alert alert-info\">%s</div>", mcm_html($message));
 	}
 }
 
@@ -25,7 +25,7 @@ if ($login->messages) {
 			<h2 class="form-signin-heading">Edit Username</h2>
 			<div class="form-group">
 				<label for="user_name"><?php echo $phplogin_lang['New username']; ?></label>
-				<input class="form-control" id="user_name" type="text" name="user_name" pattern="[a-zA-Z0-9]{2,64}" placeholder="<?php echo $phplogin_lang['currently']; ?>: <?php echo $_SESSION['user_name']; ?>" required>
+				<input class="form-control" id="user_name" type="text" name="user_name" pattern="[a-zA-Z0-9]{2,64}" placeholder="<?php echo $phplogin_lang['currently']; ?>: <?php echo mcm_html($_SESSION['user_name']); ?>" required>
 			</div>
 			<div class="form-group">
 				<button class="btn btn-primary btn-block" type="submit" name="user_edit_submit_name"><?php echo $phplogin_lang['Change username']; ?></button>
@@ -41,7 +41,7 @@ if ($login->messages) {
 			<h2 class="form-signin-heading">Edit Email</h2>
 			<div class="form-group">
 				<label for="user_email"><?php echo $phplogin_lang['New email']; ?></label>
-				<input class="form-control" id="user_email" type="email" name="user_email" placeholder="<?php echo $phplogin_lang['currently']; ?>: <?php echo $_SESSION['user_email']; ?>" required>
+				<input class="form-control" id="user_email" type="email" name="user_email" placeholder="<?php echo $phplogin_lang['currently']; ?>: <?php echo mcm_html($_SESSION['user_email']); ?>" required>
 			</div>
 			<div class="form-group">
 				<button class="btn btn-primary btn-block" type="submit" name="user_edit_submit_email"><?php echo $phplogin_lang['Change email']; ?></button>

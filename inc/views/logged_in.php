@@ -97,7 +97,9 @@ foreach ($movie_lists as $v) {
 	}
 	$db_var[] = array('list_id' => (int)$v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'share' => $v[3], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 }
-$db_var = json_encode(convert_to_utf8_recursively($db_var));
+// mcm_js() keeps list names and TMDb titles from closing the script element
+// they are about to be embedded in.
+$db_var = mcm_js(convert_to_utf8_recursively($db_var));
 //var_dump($db_var);
 
 // use to debug any json errors
@@ -163,11 +165,11 @@ $post_scripts = array('libs/ZeroClipboard.min', 'bootstrap-tabdrop', 'jquery.laz
 $script = "
 //console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
 
-var user_id = '" . $_SESSION['user_id'] . "'
+var user_id = " . mcm_js($_SESSION['user_id']) . "
 var db = " . $db_var . "
-var base_url = '" . $base_url . "'
-var poster_size_big = '" . $poster_size . "'
-var poster_size_small = '" . $_SESSION['tmdb_config']['images']['poster_sizes'][0] . "'
+var base_url = " . mcm_js($base_url) . "
+var poster_size_big = " . mcm_js($poster_size) . "
+var poster_size_small = " . mcm_js($_SESSION['tmdb_config']['images']['poster_sizes'][0]) . "
 
 // log how many movies I have
 var movie_num = 0
@@ -230,8 +232,8 @@ if (isset($errors)) var_dump($errors);
 $list_tabs = '';
 $list_containers = '';
 foreach($movie_lists as $v) {
-	$list_tabs .= sprintf("<li data-listid=\"%s\"><a href=\"#%s\" data-toggle=\"pill\">%s</a></li>\n", $v[0], $v[0], $v[1]);
-	$list_containers .= sprintf("<div class=\"tab-pane\" id=\"%s\"></div>\n", $v[0]);
+	$list_tabs .= mcm_list_tab_html($v[0], $v[1]);
+	$list_containers .= mcm_list_pane_html($v[0]);
 }
 
 ?>

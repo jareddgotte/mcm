@@ -7,14 +7,14 @@ include('header.php');
 // show negative messages
 if ($registration->errors) {
 	foreach ($registration->errors as $error) {
-		printf("<div class=\"alert alert-danger\">%s</div>", $error);
+		printf("<div class=\"alert alert-danger\">%s</div>", mcm_html($error));
 	}
 }
 
 // show positive messages
 if ($registration->messages) {
 	foreach ($registration->messages as $message) {
-		printf("<div class=\"alert alert-info\">%s</div>", $message);
+		printf("<div class=\"alert alert-info\">%s</div>", mcm_html($message));
 	}
 }
 

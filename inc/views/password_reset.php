@@ -6,12 +6,12 @@ include('header.php');
 
 if ($login->errors) {
 	foreach ($login->errors as $error) {
-		printf("<div class=\"alert alert-danger\">%s</div>", $error);
+		printf("<div class=\"alert alert-danger\">%s</div>", mcm_html($error));
 	}
 }
 if ($login->messages) {
 	foreach ($login->messages as $message) {
-		printf("<div class=\"alert alert-info\">%s</div>", $message);
+		printf("<div class=\"alert alert-info\">%s</div>", mcm_html($message));
 	}
 }
 
@@ -22,8 +22,8 @@ if ($login->passwordResetLinkIsValid() === true) {
 <div class="row">
 	<div class="col-xs-12 col-md-6 col-lg-4 col-md-offset-3 col-lg-offset-4">
 		<form method="post" action="password_reset.php" name="new_password_form">
-			<input type="hidden" name="user_name" value="<?php echo $_GET['user_name']; ?>">
-			<input type="hidden" name="user_password_reset_hash" value="<?php echo $_GET['verification_code']; ?>">
+			<input type="hidden" name="user_name" value="<?php echo mcm_html($_GET['user_name']); ?>">
+			<input type="hidden" name="user_password_reset_hash" value="<?php echo mcm_html($_GET['verification_code']); ?>">
 			<h2 class="form-signin-heading">Reset Password</h2>
 			<div class="form-group">
 				<label for="user_password_new"><?php echo $phplogin_lang['New password']; ?></label>
