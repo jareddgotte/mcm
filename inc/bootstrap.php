@@ -8,7 +8,9 @@
  *   1. installing the error, exception and shutdown handlers;
  *   2. loading configuration, on top of safe defaults;
  *   3. sending a plain-HTTP request on to the canonical HTTPS origin;
- *   4. starting the one and only session.
+ *   4. starting the one and only session;
+ *   5. handing out database connections, and deciding what a database failure
+ *      does to the request.
  *
  * The file is inert on its own: nothing happens until an entry point includes
  * it, and including it a second time in the same request is a no-op.
@@ -112,6 +114,24 @@ function mcm_bootstrap_fail($message)
 }
 
 /**
+ * Remove quoted call arguments from a stack trace.
+ *
+ * File, line and function name are what a trace is read for. The arguments are
+ * what makes keeping one dangerous: PHP records them as plain strings, and on
+ * this site those strings include the database password on a connection frame
+ * and a visitor's own password on a login frame. Runtimes from PHP 7.4 on can
+ * be told to leave them out at the source; this covers the ones that cannot,
+ * and costs nothing where they are already gone.
+ *
+ * @param string $trace
+ * @return string
+ */
+function mcm_scrub_trace($trace)
+{
+	return preg_replace("/'(?:[^'\\\\]|\\\\.)*'/", "'...'", $trace);
+}
+
+/**
  * Human-readable name for a PHP error level.
  *
  * @param int $errno
@@ -177,7 +197,7 @@ function mcm_exception_handler($exception)
 		$exception->getMessage(),
 		$exception->getFile(),
 		$exception->getLine(),
-		$exception->getTraceAsString()
+		mcm_scrub_trace($exception->getTraceAsString())
 	);
 	mcm_fail();
 }
@@ -376,6 +396,105 @@ function mcm_https_is_enforced()
 	return false;
 }
 
+/**
+ * Open a database connection.
+ *
+ * The only place in the application that builds a DSN or touches the
+ * credentials, which is why it is also the only place that has to be careful
+ * with them. On failure the driver's own message is logged - it names the real
+ * problem, such as a refused connection or an unknown database - and null is
+ * returned. The stack trace is deliberately left out: PHP records call
+ * arguments in a trace, and the arguments on the frame that just failed are the
+ * DSN, the user and the password.
+ *
+ * @param string $context what the connection was being opened for; logged
+ * @return PDO|null the connection, or null when it could not be opened
+ */
+function mcm_db_connect($context)
+{
+	try {
+		$connection = new PDO('mysql:host=' . DB_HOST . ';dbname=' . DB_NAME, DB_USER, DB_PASS);
+	} catch (PDOException $exception) {
+		mcm_log('Database error', $context . ': connection failed: ' . $exception->getMessage());
+		return null;
+	}
+
+	// The driver's own default differs between runtimes - silent on the ones
+	// this code grew up on, throwing from PHP 8 on - so a failing statement
+	// used to behave differently depending on where the site was hosted.
+	// Pinning it makes that one behaviour everywhere; mcm_db_execute() handles
+	// both shapes regardless.
+	$connection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+	return $connection;
+}
+
+/**
+ * Open a database connection, or stop the request.
+ *
+ * A page that cannot reach the database has nothing to serve. Carrying on with
+ * a connection that is not one turns the outage into a second, unrelated
+ * failure on the next line, which is what used to reach the client; this either
+ * returns a usable connection or does not return at all.
+ *
+ * @param string $context what the connection was being opened for; logged
+ * @return PDO
+ */
+function mcm_db_or_fail($context)
+{
+	$connection = mcm_db_connect($context);
+
+	if ($connection === null) {
+		// mcm_db_connect() has already logged why. The client gets the generic
+		// body and nothing else.
+		mcm_fail();
+	}
+
+	return $connection;
+}
+
+/**
+ * Run a prepared statement, or stop the request.
+ *
+ * Both shapes of statement failure are covered: the exception a modern driver
+ * throws, and the false an older one returns. Either way the driver's message
+ * and the statement's own SQL go to the log - between them they are enough to
+ * find the fault - and the client gets the generic body.
+ *
+ * @param PDOStatement $statement the prepared statement to run
+ * @param string       $context   what the query was for; logged
+ * @return bool true; on failure the request has already ended
+ */
+function mcm_db_execute($statement, $context)
+{
+	if (!is_object($statement)) {
+		$detail = 'the statement was never prepared';
+	} else {
+		try {
+			if ($statement->execute() !== false) {
+				return true;
+			}
+
+			$info   = $statement->errorInfo();
+			$detail = (isset($info[2]) && $info[2] !== null) ? $info[2] : 'the driver reported no detail';
+			if (isset($info[0]) && $info[0] !== null) {
+				$detail = 'SQLSTATE[' . $info[0] . '] ' . $detail;
+			}
+		} catch (PDOException $exception) {
+			$detail = $exception->getMessage();
+		}
+
+		// A prepared statement carries placeholders, not values, so the SQL is
+		// safe to log and is the fastest way to recognise which query failed.
+		if (isset($statement->queryString) && $statement->queryString !== '') {
+			$detail .= ' [query: ' . $statement->queryString . ']';
+		}
+	}
+
+	mcm_log('Database error', $context . ': ' . $detail);
+	mcm_fail();
+}
+
 /*
  * ---------------------------------------------------------------------------
  * 1. Error behaviour, before anything else
@@ -391,6 +510,9 @@ error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors', '0');
 @ini_set('display_startup_errors', '0');
 @ini_set('log_errors', '1');
+// Keep call arguments - which include passwords - out of the traces PHP builds
+// for exceptions. Available from PHP 7.4; mcm_scrub_trace() covers the rest.
+@ini_set('zend.exception_ignore_args', '1');
 
 set_error_handler('mcm_error_handler');
 set_exception_handler('mcm_exception_handler');

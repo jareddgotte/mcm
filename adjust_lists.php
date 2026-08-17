@@ -2,7 +2,6 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
-$errors = array();
 
 // Kill the script if someone got here improperly
 $stop_state = json_decode((isset($_POST['stop_state'])) ? $_POST['stop_state'] : ((isset($_GET['stop_state'])) ? $_GET['stop_state'] : ''));
@@ -15,12 +14,7 @@ if ($stop_pos === '') { echo 'Error: No stop pos given.'; exit(); }
 
 //printf("c[%s] m[%s]\n", $current_list, $movie_id);
 //echo "trying to connect to db<br>\n";
-try {
-	$db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
-} catch (PDOException $e) {
-	$db_connection = false;
-	$errors[] = 'Database error' . $e->getMessage();
-}
+$db_connection = mcm_db_or_fail('adjust_lists');
 
 // adjusting lists
 //echo "adjusting lists<br>\n";
@@ -29,15 +23,9 @@ for ($i = $start_pos; $i <= $stop_pos; $i++) {
 	$query = $db_connection->prepare('UPDATE movie_lists SET list_rank = :list_rank WHERE movie_list_id = :movie_list_id');
 	$query->bindValue(':list_rank', $i, PDO::PARAM_STR);
 	$query->bindValue(':movie_list_id', $stop_state[$i], PDO::PARAM_INT);
-	if ($query->execute() === FALSE) {
-		$errorInfo = $query->errorInfo();
-		$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
-	}
+	mcm_db_execute($query, 'adjust_lists: re-ranking a list');
 }
 //echo "done<br>\n";
 
-if (isset($errors)) if (count($errors) > 0) var_dump($errors);
-else {
-	// Update our db var
-	echo 'greatsuccess';
-}
+// Update our db var
+echo 'greatsuccess';
