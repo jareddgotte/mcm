@@ -30,15 +30,17 @@ the application. Setup is documented in `README.md`.
   duplicate declaration, as in `tests/pages/fault_compile.php` - reaches
   `mcm_shutdown_handler()`. A "fatal" case built on a parse error leaves the
   shutdown handler untested.
-- The suite is developer-only and its PHP floor is independent of the site's:
-  it is run and verified on PHP 8.1 and 8.4.
+- PHP 8.3 is the modernization target runtime, and the suite is verified there.
+  It is also run on 8.1, the older runtime still in play, and on 8.4 as
+  forward-compatibility evidence. The suite is developer-only, so its PHP floor
+  is independent of the site's.
 - Known, unfixed, and surfaced by the suite: on PHP 8.5 `imagefttext()` no
   longer accepts a relative font path, so the captcha's
   `'../fonts/times_new_yorker.ttf'` in `inc/showCaptcha.php` stops rendering
   and logs a font warning. An absolute path still works. The suite is green on
-  8.1 and 8.4 and fails exactly this one assertion on 8.5; that failure is the
-  site's, not the harness's, and the assertion stays as it is until the captcha
-  is fixed.
+  8.1, 8.3 and 8.4 and fails exactly this one assertion on 8.5; that failure is
+  the site's, not the harness's, and the assertion stays as it is until the
+  captcha is fixed.
 - When changing the harness, re-run the mutation sweep rather than trusting a
   green run: an assertion that cannot fail still passes.
 
