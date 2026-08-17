@@ -4,7 +4,6 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
-$errors = array();
 
 $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
 //$movie_list_id = 1;
@@ -31,12 +30,7 @@ if (isset($ImportList['status_code'])) {
 }
 
 //echo "trying to connect to db<br>\n";
-try {
-	$db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
-} catch (PDOException $e) {
-	$db_connection = false;
-	$errors[] = 'Database error' . $e->getMessage();
-}
+$db_connection = mcm_db_or_fail('import_list');
 
 //echo "iterating through imported list<br>\n";
 foreach ($ImportList['items'] as $v) {
@@ -44,10 +38,7 @@ foreach ($ImportList['items'] as $v) {
 	//echo "checking if movie is already added to master list<br>\n";
 	$query = $db_connection->prepare('SELECT * FROM master_movie_list WHERE tmdb_movie_id = :id');
 	$query->bindValue(':id', $v['id'], PDO::PARAM_INT);
-	if ($query->execute() === FALSE) {
-		$errorInfo = $query->errorInfo();
-		$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
-	}
+	mcm_db_execute($query, 'import_list: looking a movie up in the master list');
 	$rows = $query->fetchAll(PDO::FETCH_OBJ);
 	$update = false;
 	//   if it is, update movie details
@@ -65,10 +56,7 @@ foreach ($ImportList['items'] as $v) {
 			$query->bindValue(':poster_path', $v['poster_path'], PDO::PARAM_STR);
 			$query->bindValue(':release_date', $v['release_date'], PDO::PARAM_STR);
 			$query->bindValue(':id', $v['id'], PDO::PARAM_INT);
-			if ($query->execute() === FALSE) {
-				$errorInfo = $query->errorInfo();
-				$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
-			}
+			mcm_db_execute($query, 'import_list: updating the master list');
 		}
 	}
 	//   otherwise, add it
@@ -80,19 +68,13 @@ foreach ($ImportList['items'] as $v) {
 		$query->bindValue(':original_title', $v['original_title'], PDO::PARAM_STR);
 		$query->bindValue(':poster_path', $v['poster_path'], PDO::PARAM_STR);
 		$query->bindValue(':release_date', $v['release_date'], PDO::PARAM_STR);
-		if ($query->execute() === FALSE) {
-			$errorInfo = $query->errorInfo();
-			$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
-		}
+		mcm_db_execute($query, 'import_list: inserting into the master list');
 	}
 	// check if movie is already added to this list or other lists of user
 	//echo "checking if movie is already added to user's lists<br>\n";
 	$query = $db_connection->prepare('SELECT * FROM movies a JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id');
 	$query->bindValue(':tmdb_movie_id', $v['id'], PDO::PARAM_INT);
-	if ($query->execute() === FALSE) {
-		$errorInfo = $query->errorInfo();
-		$errors[] = sprintf("Execute error: %s<br>\n", $errorInfo[2]);
-	}
+	mcm_db_execute($query, "import_list: checking the user's lists for the movie");
 	$rows = $query->fetchAll(PDO::FETCH_OBJ);
 	//   if it isn't, add it
 	if (count($rows) === 0) {
@@ -100,42 +82,30 @@ foreach ($ImportList['items'] as $v) {
 		$query = $db_connection->prepare('INSERT INTO movies (movie_list_id, tmdb_movie_id) VALUES (:movie_list_id, :tmdb_movie_id)');
 		$query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_STR);
 		$query->bindValue(':tmdb_movie_id', $v['id'], PDO::PARAM_INT);
-		if ($query->execute() === FALSE) {
-			$errorInfo = $query->errorInfo();
-			$errors[] = sprintf("Execute error: %s", $errorInfo[2]);
-		}
+		mcm_db_execute($query, "import_list: adding a movie to the user's list");
 	}
 }
 //echo "done<br>\n";
 
-if (isset($errors)) if (count($errors) > 0) var_dump($errors);
-else {
-	// Update our db var
-	echo 'greatsuccess';
-	$query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
-	$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
-	if ($query->execute() === FALSE) {
-		$errorInfo = $query->errorInfo();
-		$errors[] = 'Execute error: ' . $errorInfo[2];
-	}
-	
-	$movie_lists = array();
-	while ($row = $query->fetch(PDO::FETCH_OBJ)) {
-		$movie_lists[$row->list_rank] = array($row->movie_list_id, $row->list_name, $row->list_description);
-	}
-	
-	// Construct our javascript db var
-	$db_var = array();
-	foreach ($movie_lists as $v) {
-		$query = $db_connection->prepare('SELECT b.tmdb_movie_id AS movie_id, b.tmdb_title AS title, b.tmdb_original_title AS original_title, b.tmdb_poster_path AS poster_path, b.tmdb_release_date AS release_date FROM movies a JOIN master_movie_list b ON a.tmdb_movie_id = b.tmdb_movie_id WHERE movie_list_id = :movie_list_id');
-		$query->bindValue(':movie_list_id', $v[0], PDO::PARAM_INT);
-		if ($query->execute() === FALSE) {
-			$errorInfo = $query->errorInfo();
-			$errors[] = 'Execute error: ' . $errorInfo[2];
-		}
-		$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
-	}
-	// This response is served as HTML by default, so a list name or title with
-	// markup in it must not survive as markup on the way out.
-	echo mcm_js($db_var);
+// Update our db var
+echo 'greatsuccess';
+$query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
+$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
+mcm_db_execute($query, 'import_list: listing the lists');
+
+$movie_lists = array();
+while ($row = $query->fetch(PDO::FETCH_OBJ)) {
+	$movie_lists[$row->list_rank] = array($row->movie_list_id, $row->list_name, $row->list_description);
 }
+
+// Construct our javascript db var
+$db_var = array();
+foreach ($movie_lists as $v) {
+	$query = $db_connection->prepare('SELECT b.tmdb_movie_id AS movie_id, b.tmdb_title AS title, b.tmdb_original_title AS original_title, b.tmdb_poster_path AS poster_path, b.tmdb_release_date AS release_date FROM movies a JOIN master_movie_list b ON a.tmdb_movie_id = b.tmdb_movie_id WHERE movie_list_id = :movie_list_id');
+	$query->bindValue(':movie_list_id', $v[0], PDO::PARAM_INT);
+	mcm_db_execute($query, 'import_list: listing a list');
+	$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
+}
+// This response is served as HTML by default, so a list name or title with
+// markup in it must not survive as markup on the way out.
+echo mcm_js($db_var);

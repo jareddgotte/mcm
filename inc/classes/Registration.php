@@ -57,6 +57,9 @@ class Registration
 
     /**
      * Checks if database connection is opened and open it if not
+     *
+     * The connection comes from the shared bootstrap, which logs why it failed.
+     * The visitor is told only that there is a database problem.
      */
     private function databaseConnection()
     {
@@ -64,15 +67,15 @@ class Registration
         if ($this->db_connection != null) {
             return true;
         } else {
-            // create a database connection, using the constants from config/config.php
-            try {
-                $this->db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
-                return true;
-            // If an error is catched, database connection failed
-            } catch (PDOException $e) {
+            // the credentials live in config/config.php, which only the
+            // bootstrap reads
+            $this->db_connection = mcm_db_connect('registration');
+            // If the connection could not be opened, registration cannot go on
+            if ($this->db_connection === null) {
                 $this->errors[] = $this->lang['Database error'];
                 return false;
             }
+            return true;
         }
     }
 
@@ -124,17 +127,12 @@ class Registration
                     $this->errors[] = ($result[$i]['user_name'] == $user_name) ? $this->lang['Username exist'] : $this->lang['Email exist'];
                 }
             } else {
-                // check if we have a constant HASH_COST_FACTOR defined (in config/hashing.php),
-                // if so: put the value into $hash_cost_factor, if not, make $hash_cost_factor = null
-                $hash_cost_factor = (defined('HASH_COST_FACTOR') ? HASH_COST_FACTOR : null);
-
-                // crypt the user's password with the PHP 5.5's password_hash() function, results in a 60 character hash string
-                // the PASSWORD_DEFAULT constant is defined by the PHP 5.5, or if you are using PHP 5.3/5.4, by the password hashing
-                // compatibility library. the third parameter looks a little bit shitty, but that's how those PHP 5.5 functions
-                // want the parameter: as an array with, currently only used with 'cost' => XX.
-                $user_password_hash = password_hash($user_password, PASSWORD_DEFAULT, array('cost' => $hash_cost_factor));
-                // generate random hash for email verification (40 char string)
-                $user_activation_hash = sha1(uniqid(mt_rand(), true));
+                // hash the user's password with the configured cost factor
+                $user_password_hash = mcm_password_hash($user_password);
+                // generate a random token for email verification. 40 characters
+                // is the width of users.user_activation_hash, the same length the
+                // previous sha1() value had.
+                $user_activation_hash = mcm_random_token(40);
 
                 // write new users data into database
                 $query_new_user_insert = $this->db_connection->prepare('INSERT INTO users (user_name, user_password_hash, user_email, user_activation_hash, user_registration_ip, user_registration_datetime) VALUES(:user_name, :user_password_hash, :user_email, :user_activation_hash, :user_registration_ip, now())');

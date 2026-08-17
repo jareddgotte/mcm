@@ -302,6 +302,19 @@ function mcm_seed_session(array $fixture, $id, array $data)
 	file_put_contents($fixture['sessions'] . '/sess_' . $id, $encoded);
 }
 
+/** The session identifiers the fixture currently has files for, sorted. */
+function mcm_session_files(array $fixture)
+{
+	$found = array();
+	foreach (scandir($fixture['sessions']) as $entry) {
+		if (strpos($entry, 'sess_') === 0) {
+			$found[] = substr($entry, 5);
+		}
+	}
+	sort($found);
+	return $found;
+}
+
 /* Running a fixture --------------------------------------------------------- */
 
 /**
@@ -334,16 +347,23 @@ function mcm_ini_args(array $fixture)
 /**
  * Run one page, named relative to the document root, as a child process.
  *
+ * @param array $env extra environment variables for the page, so a case can
+ *                   hand it a value - a stored password hash, a cookie issued
+ *                   by an older version of the site - without writing it into
+ *                   the fixture.
  * @return array status, stdout, log
  */
-function mcm_cli(array $fixture, $script)
+function mcm_cli(array $fixture, $script, array $env = array())
 {
 	file_put_contents($fixture['log'], '');
 
 	$command = escapeshellarg(PHP_BINARY) . mcm_ini_args($fixture) . ' ' . escapeshellarg($fixture['public'] . '/' . $script);
 	$pipes   = array();
 	$output  = array('file', $fixture['root'] . '/stderr.log', 'a');
-	$process = proc_open($command, array(1 => array('pipe', 'w'), 2 => $output), $pipes, $fixture['public']);
+	// proc_open() replaces the whole environment rather than adding to it, so
+	// this process's own is merged in; without it the child loses PATH.
+	$environment = (count($env) > 0) ? $env + getenv() : null;
+	$process = proc_open($command, array(1 => array('pipe', 'w'), 2 => $output), $pipes, $fixture['public'], $environment);
 
 	if (!is_resource($process)) {
 		throw new RuntimeException('could not start ' . $command);
@@ -414,9 +434,15 @@ function mcm_server_stop(array $server)
  * read off the wire rather than out of headers_list(), so the cookie cases
  * assert what a browser would actually receive.
  *
+ * A supplied "Host:" line replaces the default one rather than being added to
+ * it: two Host headers is a malformed request, and a case that spoofs the host
+ * needs the server to see exactly one.
+ *
+ * @param string $method GET unless a case needs the request method itself to
+ *                       matter, as the method-preserving redirect does
  * @return array status, headers, body, log
  */
-function mcm_http(array $server, $path, array $headers = array())
+function mcm_http(array $server, $path, array $headers = array(), $method = 'GET')
 {
 	file_put_contents($server['fixture']['log'], '');
 
@@ -426,12 +452,24 @@ function mcm_http(array $server, $path, array $headers = array())
 	}
 	stream_set_timeout($socket, 10);
 
-	$request = 'GET ' . $path . " HTTP/1.1\r\n"
-		. 'Host: ' . $server['host'] . ':' . $server['port'] . "\r\n"
-		. "Connection: close\r\n";
-	foreach ($headers as $header) {
-		$request .= $header . "\r\n";
+	$lines = array(
+		'Host: ' . $server['host'] . ':' . $server['port'],
+		'Connection: close',
+	);
+	if (strtoupper($method) !== 'GET' && strtoupper($method) !== 'HEAD') {
+		// A request with a method that may carry a body has to say it carries
+		// none, or the server waits for one.
+		$lines[] = 'Content-Length: 0';
 	}
+	foreach ($headers as $header) {
+		if (stripos($header, 'host:') === 0) {
+			$lines[0] = $header;
+		} else {
+			$lines[] = $header;
+		}
+	}
+
+	$request = strtoupper($method) . ' ' . $path . " HTTP/1.1\r\n" . implode("\r\n", $lines) . "\r\n";
 	fwrite($socket, $request . "\r\n");
 	$raw = '';
 	while (!feof($socket)) {

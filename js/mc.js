@@ -682,7 +682,7 @@ $(function () {
 									<span class="input-group-btn">\
 										<button id="share-copy-button" class="btn btn-primary" type="button" data-clipboard-target="share-copy-input">Copy</button>\
 									</span>\
-									<input id="share-copy-input" type="text" class="form-control" value="http://' + window.location.hostname + '/mcm/share.php?id=' + user_id + '" readonly="readonly" onclick="this.select()">\
+									<input id="share-copy-input" type="text" class="form-control" value="' + window.location.protocol + '//' + window.location.hostname + '/mcm/share.php?id=' + user_id + '" readonly="readonly" onclick="this.select()">\
 								</div><!-- /input-group -->\
 								<p>By default, all of your lists are private.  If you would like to publicly share your lists, check them then save below.</p>' + (function () {
 								var ret = '<ul class="nav nav-pills nav-stacked" id="shareit">'

@@ -6,8 +6,12 @@
  * Every public entry point includes this file, first and exactly once. It is
  * the single place responsible for:
  *   1. installing the error, exception and shutdown handlers;
- *   2. loading configuration, on top of safe defaults;
- *   3. starting the one and only session.
+ *   2. loading inc/security.php, the shared security primitives;
+ *   3. loading configuration, on top of safe defaults;
+ *   4. sending a plain-HTTP request on to the canonical HTTPS origin;
+ *   5. starting the one and only session;
+ *   6. handing out database connections, and deciding what a database failure
+ *      does to the request.
  *
  * The file is inert on its own: nothing happens until an entry point includes
  * it, and including it a second time in the same request is a no-op.
@@ -111,6 +115,24 @@ function mcm_bootstrap_fail($message)
 }
 
 /**
+ * Remove quoted call arguments from a stack trace.
+ *
+ * File, line and function name are what a trace is read for. The arguments are
+ * what makes keeping one dangerous: PHP records them as plain strings, and on
+ * this site those strings include the database password on a connection frame
+ * and a visitor's own password on a login frame. Runtimes from PHP 7.4 on can
+ * be told to leave them out at the source; this covers the ones that cannot,
+ * and costs nothing where they are already gone.
+ *
+ * @param string $trace
+ * @return string
+ */
+function mcm_scrub_trace($trace)
+{
+	return preg_replace("/'(?:[^'\\\\]|\\\\.)*'/", "'...'", $trace);
+}
+
+/**
  * Human-readable name for a PHP error level.
  *
  * @param int $errno
@@ -176,7 +198,7 @@ function mcm_exception_handler($exception)
 		$exception->getMessage(),
 		$exception->getFile(),
 		$exception->getLine(),
-		$exception->getTraceAsString()
+		mcm_scrub_trace($exception->getTraceAsString())
 	);
 	mcm_fail();
 }
@@ -203,8 +225,9 @@ function mcm_shutdown_handler()
 /**
  * Whether the current request arrived over HTTPS.
  *
- * Only signals the web server itself sets are trusted here; forwarded headers
- * are not consulted.
+ * Only signals the web server itself sets are trusted. The forwarded header a
+ * TLS-terminating proxy sends is consulted only when the configuration says
+ * there is such a proxy, because any client can send that header.
  *
  * @return bool
  */
@@ -216,8 +239,261 @@ function mcm_request_is_https()
 	if (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443) {
 		return true;
 	}
+	if (defined('MCM_TRUST_FORWARDED_PROTO') && MCM_TRUST_FORWARDED_PROTO && isset($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+		// A chain of proxies appends to the header; the first entry is the one
+		// the visitor's own connection used.
+		$forwarded = explode(',', $_SERVER['HTTP_X_FORWARDED_PROTO']);
+		return strtolower(trim($forwarded[0])) === 'https';
+	}
 
 	return false;
+}
+
+/**
+ * Whether a string can be used as the host part of a redirect URL.
+ *
+ * Deliberately narrow: a host name or address, with an optional port, and
+ * nothing else. Anything that could carry credentials, a path or a second host
+ * fails here. The caller trims a scheme and path off a configured value first,
+ * so this only ever judges what is left.
+ *
+ * @param string $host
+ * @return bool
+ */
+function mcm_valid_host($host)
+{
+	return preg_match('#^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9\-.]*[A-Za-z0-9])?)(:[0-9]{1,5})?$#', $host) === 1;
+}
+
+/**
+ * The origin every absolute redirect is built on: "https://" and the
+ * configured canonical host.
+ *
+ * Returns an empty string when no canonical host is configured, or when the
+ * configured one is unusable. The request's own Host header is never a
+ * fallback - that is the whole point of this function - so redirects stay
+ * relative instead, which keeps them on whichever host the visitor is already
+ * using without letting the request name a different one.
+ *
+ * @return string
+ */
+function mcm_canonical_origin()
+{
+	static $origin = null;
+
+	if ($origin !== null) {
+		return $origin;
+	}
+
+	$host = defined('MCM_CANONICAL_HOST') ? trim((string) MCM_CANONICAL_HOST) : '';
+	if ($host === '') {
+		return $origin = '';
+	}
+
+	// Be forgiving about the shape a site writes it in: "https://example.com/"
+	// means the same thing as "example.com".
+	$scheme = strpos($host, '://');
+	if ($scheme !== false) {
+		$host = substr($host, $scheme + 3);
+	}
+	$slash = strpos($host, '/');
+	if ($slash !== false) {
+		$host = substr($host, 0, $slash);
+	}
+
+	if (!mcm_valid_host($host)) {
+		mcm_log('Configuration', 'MCM_CANONICAL_HOST is not a usable host name, so redirects stay relative');
+		return $origin = '';
+	}
+
+	return $origin = 'https://' . $host;
+}
+
+/**
+ * Reduce any value to a path on this site.
+ *
+ * Whatever comes in, what comes out starts with exactly one "/" and names no
+ * origin of its own, so it cannot send a visitor to another site. Query
+ * strings survive; a scheme and host do not.
+ *
+ * @param string $path
+ * @return string
+ */
+function mcm_local_path($path)
+{
+	$path = (string) $path;
+
+	// A header value ends at the first control character anyway, and PHP would
+	// refuse the whole header rather than truncate it.
+	$path = substr($path, 0, strcspn($path, "\r\n\0"));
+
+	// "http://elsewhere/x" keeps only "/x".
+	$scheme = strpos($path, '://');
+	if ($scheme !== false) {
+		$rest  = substr($path, $scheme + 3);
+		$slash = strpos($rest, '/');
+		$path  = ($slash === false) ? '' : substr($rest, $slash);
+	}
+
+	// "//elsewhere/x" is a URL for another origin rather than a path on this
+	// one, and browsers read a backslash here as a slash, so both go.
+	return '/' . ltrim($path, "/\\");
+}
+
+/**
+ * The value a Location header should carry to send a visitor to $path here.
+ *
+ * Absolute and HTTPS when a canonical host is configured, and a path on the
+ * current host otherwise. Either way the request cannot influence it.
+ *
+ * @param string $path path on this site, e.g. "/index.php"
+ * @return string
+ */
+function mcm_redirect_target($path)
+{
+	return mcm_canonical_origin() . mcm_local_path($path);
+}
+
+/**
+ * Redirect to $path on this site and stop the request.
+ *
+ * @param string $path   path on this site
+ * @param int    $status 302 by default; see the note on permanence below
+ */
+function mcm_redirect($path, $status = 302)
+{
+	if (!headers_sent()) {
+		header('Location: ' . mcm_redirect_target($path), true, $status);
+	}
+	exit;
+}
+
+/**
+ * Whether a plain-HTTP request should be sent on to the HTTPS origin.
+ *
+ * Enforcement needs a canonical host: without one there is no HTTPS address to
+ * send anyone to that the request itself did not supply.
+ *
+ * @return bool
+ */
+function mcm_https_is_enforced()
+{
+	$forced = defined('MCM_FORCE_HTTPS') ? MCM_FORCE_HTTPS : null;
+
+	if ($forced === false) {
+		return false;
+	}
+	if (mcm_canonical_origin() !== '') {
+		return true;
+	}
+
+	if ($forced) {
+		static $logged = false;
+		if (!$logged) {
+			$logged = true;
+			mcm_log('Configuration', 'MCM_FORCE_HTTPS is on but MCM_CANONICAL_HOST is not set, so HTTPS is not enforced');
+		}
+	}
+	return false;
+}
+
+/**
+ * Open a database connection.
+ *
+ * The only place in the application that builds a DSN or touches the
+ * credentials, which is why it is also the only place that has to be careful
+ * with them. On failure the driver's own message is logged - it names the real
+ * problem, such as a refused connection or an unknown database - and null is
+ * returned. The stack trace is deliberately left out: PHP records call
+ * arguments in a trace, and the arguments on the frame that just failed are the
+ * DSN, the user and the password.
+ *
+ * @param string $context what the connection was being opened for; logged
+ * @return PDO|null the connection, or null when it could not be opened
+ */
+function mcm_db_connect($context)
+{
+	try {
+		$connection = new PDO('mysql:host=' . DB_HOST . ';dbname=' . DB_NAME, DB_USER, DB_PASS);
+	} catch (PDOException $exception) {
+		mcm_log('Database error', $context . ': connection failed: ' . $exception->getMessage());
+		return null;
+	}
+
+	// The driver's own default differs between runtimes - silent on the ones
+	// this code grew up on, throwing from PHP 8 on - so a failing statement
+	// used to behave differently depending on where the site was hosted.
+	// Pinning it makes that one behaviour everywhere; mcm_db_execute() handles
+	// both shapes regardless.
+	$connection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+	return $connection;
+}
+
+/**
+ * Open a database connection, or stop the request.
+ *
+ * A page that cannot reach the database has nothing to serve. Carrying on with
+ * a connection that is not one turns the outage into a second, unrelated
+ * failure on the next line, which is what used to reach the client; this either
+ * returns a usable connection or does not return at all.
+ *
+ * @param string $context what the connection was being opened for; logged
+ * @return PDO
+ */
+function mcm_db_or_fail($context)
+{
+	$connection = mcm_db_connect($context);
+
+	if ($connection === null) {
+		// mcm_db_connect() has already logged why. The client gets the generic
+		// body and nothing else.
+		mcm_fail();
+	}
+
+	return $connection;
+}
+
+/**
+ * Run a prepared statement, or stop the request.
+ *
+ * Both shapes of statement failure are covered: the exception a modern driver
+ * throws, and the false an older one returns. Either way the driver's message
+ * and the statement's own SQL go to the log - between them they are enough to
+ * find the fault - and the client gets the generic body.
+ *
+ * @param PDOStatement $statement the prepared statement to run
+ * @param string       $context   what the query was for; logged
+ * @return bool true; on failure the request has already ended
+ */
+function mcm_db_execute($statement, $context)
+{
+	if (!is_object($statement)) {
+		$detail = 'the statement was never prepared';
+	} else {
+		try {
+			if ($statement->execute() !== false) {
+				return true;
+			}
+
+			$info   = $statement->errorInfo();
+			$detail = (isset($info[2]) && $info[2] !== null) ? $info[2] : 'the driver reported no detail';
+			if (isset($info[0]) && $info[0] !== null) {
+				$detail = 'SQLSTATE[' . $info[0] . '] ' . $detail;
+			}
+		} catch (PDOException $exception) {
+			$detail = $exception->getMessage();
+		}
+
+		// A prepared statement carries placeholders, not values, so the SQL is
+		// safe to log and is the fastest way to recognise which query failed.
+		if (isset($statement->queryString) && $statement->queryString !== '') {
+			$detail .= ' [query: ' . $statement->queryString . ']';
+		}
+	}
+
+	mcm_log('Database error', $context . ': ' . $detail);
+	mcm_fail();
 }
 
 /*
@@ -379,10 +655,21 @@ error_reporting(E_ALL & ~E_NOTICE);
 @ini_set('display_errors', '0');
 @ini_set('display_startup_errors', '0');
 @ini_set('log_errors', '1');
+// Keep call arguments - which include passwords - out of the traces PHP builds
+// for exceptions. Available from PHP 7.4; mcm_scrub_trace() covers the rest.
+@ini_set('zend.exception_ignore_args', '1');
 
 set_error_handler('mcm_error_handler');
 set_exception_handler('mcm_exception_handler');
 register_shutdown_function('mcm_shutdown_handler');
+
+/*
+ * The shared security primitives: random tokens, constant-time comparison,
+ * password hashing and session identifier renewal. Loaded after the handlers
+ * so that a missing file produces the generic response like any other failure,
+ * and before the configuration because nothing there depends on it.
+ */
+require_once dirname(__FILE__) . '/security.php';
 
 /*
  * ---------------------------------------------------------------------------
@@ -427,6 +714,16 @@ $mcm_defaults = array(
 	// null means "secure when the request came in over HTTPS". Set it to true
 	// once the site is HTTPS-only.
 	'MCM_SESSION_COOKIE_SECURE'   => null,
+	// The one host the application is willing to name in a redirect, e.g.
+	// "example.com". Empty means none is configured and redirects stay
+	// relative; either way the request's Host header is never used.
+	'MCM_CANONICAL_HOST'          => '',
+	// null means "enforce HTTPS once a canonical host is configured". false
+	// switches enforcement off again with no code change.
+	'MCM_FORCE_HTTPS'             => null,
+	// Only true where a proxy in front of this application terminates TLS and
+	// forwards the request over plain HTTP.
+	'MCM_TRUST_FORWARDED_PROTO'   => false,
 );
 
 foreach ($mcm_defaults as $mcm_name => $mcm_value) {
@@ -473,7 +770,44 @@ if (MCM_ERROR_LOG !== '') {
 
 /*
  * ---------------------------------------------------------------------------
- * 3. Session
+ * 3. HTTPS
+ * ---------------------------------------------------------------------------
+ *
+ * A plain-HTTP request is sent on to the same address on the canonical HTTPS
+ * origin, before the session is started, so no session cookie is ever issued
+ * over an unencrypted connection.
+ *
+ * Two deliberate limits:
+ *
+ *   - The redirect is temporary (302, or 307 so that a form submission keeps
+ *     its method and body). A permanent redirect is remembered by browsers and
+ *     would outlive the switch that turns this off, which is the same trap that
+ *     keeps HSTS out of this file for now.
+ *   - Only the scheme is corrected. A request that already arrived over HTTPS
+ *     is served whatever host it came in on, so a site with more than one
+ *     working host name keeps them all, and a mistake in MCM_CANONICAL_HOST
+ *     cannot make the site unreachable.
+ *
+ * To switch enforcement off, put this in inc/config/config.php:
+ *
+ *     define('MCM_FORCE_HTTPS', false);
+ */
+
+// The command line has no request to redirect.
+if (PHP_SAPI !== 'cli' && !mcm_request_is_https() && mcm_https_is_enforced()) {
+	$mcm_method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper($_SERVER['REQUEST_METHOD']) : 'GET';
+	if (isset($_SERVER['REQUEST_URI'])) {
+		$mcm_here = $_SERVER['REQUEST_URI'];
+	} else {
+		$mcm_here = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/';
+	}
+
+	mcm_redirect($mcm_here, ($mcm_method === 'GET' || $mcm_method === 'HEAD') ? 302 : 307);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * 4. Session
  * ---------------------------------------------------------------------------
  *
  * This is the only session_start() in the application. Entry points and the

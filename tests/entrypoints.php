@@ -82,8 +82,85 @@ function mcm_function_source($file, $function)
  */
 function mcm_count_calls($file, $function)
 {
+	return mcm_count_calls_in(mcm_tokens($file), $function);
+}
+
+/**
+ * The body of one function or method, as tokens.
+ *
+ * A fact about one authentication transition has to be read from that
+ * transition's own code: a check that scans the whole file would accept a call
+ * that sits in some other method entirely. Returns an empty array when the file
+ * declares no such function.
+ */
+function mcm_method_tokens($file, $method)
+{
 	$tokens = mcm_tokens($file);
-	$count  = 0;
+	$total  = count($tokens);
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_FUNCTION) {
+			continue;
+		}
+		if (!isset($tokens[$index + 1]) || $tokens[$index + 1]['id'] !== T_STRING
+			|| strcasecmp($tokens[$index + 1]['text'], $method) !== 0) {
+			continue;
+		}
+
+		// Walk past the parameter list: the body starts at the first "{" that is
+		// not inside parentheses, which a default parameter value could be.
+		$parentheses = 0;
+		$body        = array();
+		$depth       = 0;
+		$started     = false;
+
+		for ($cursor = $index + 2; $cursor < $total; $cursor++) {
+			$text = $tokens[$cursor]['text'];
+			$id   = $tokens[$cursor]['id'];
+
+			if (!$started) {
+				if ($text === '(') {
+					$parentheses++;
+				} elseif ($text === ')') {
+					$parentheses--;
+				} elseif ($text === '{' && $parentheses === 0) {
+					$started = true;
+					$depth   = 1;
+				} elseif ($text === ';' && $parentheses === 0) {
+					// An abstract or interface declaration has no body at all.
+					return array();
+				}
+				continue;
+			}
+
+			// T_CURLY_OPEN and T_DOLLAR_OPEN_CURLY_BRACES are the "{" of a string
+			// interpolation; their closing "}" is an ordinary token, so they have
+			// to be counted or the braces stop balancing.
+			if ($text === '{' || $id === T_CURLY_OPEN || $id === T_DOLLAR_OPEN_CURLY_BRACES) {
+				$depth++;
+			} elseif ($text === '}') {
+				$depth--;
+				if ($depth === 0) {
+					return $body;
+				}
+			}
+			$body[] = $tokens[$cursor];
+		}
+	}
+
+	return array();
+}
+
+/** Count calls to a named function inside one function or method only. */
+function mcm_method_calls($file, $method, $function)
+{
+	return mcm_count_calls_in(mcm_method_tokens($file, $method), $function);
+}
+
+/** Count calls to a named function in an already tokenized slice of source. */
+function mcm_count_calls_in(array $tokens, $function)
+{
+	$count = 0;
 
 	foreach ($tokens as $index => $token) {
 		if ($token['id'] !== T_STRING || strcasecmp($token['text'], $function) !== 0) {
@@ -224,6 +301,150 @@ function mcm_escaping_problems($file)
 	return $problems;
 }
 
+/**
+ * The arguments of every header() call in a file, one flat token string per
+ * call.
+ *
+ * Reading the call's own tokens is what makes this usable as evidence: a
+ * comment about the Host header, or a mention of it elsewhere in the file,
+ * cannot be mistaken for a header the file actually sends.
+ */
+function mcm_header_calls($file)
+{
+	$tokens = mcm_tokens($file);
+	$total  = count($tokens);
+	$calls  = array();
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_STRING || strcasecmp($token['text'], 'header') !== 0) {
+			continue;
+		}
+		if (!isset($tokens[$index + 1]) || $tokens[$index + 1]['text'] !== '(') {
+			continue;
+		}
+		if (isset($tokens[$index - 1])) {
+			$previous = $tokens[$index - 1]['id'];
+			if ($previous === T_FUNCTION || $previous === T_OBJECT_OPERATOR || $previous === T_DOUBLE_COLON) {
+				continue;
+			}
+		}
+
+		$depth = 0;
+		$parts = array();
+		for ($cursor = $index + 1; $cursor < $total; $cursor++) {
+			$text = $tokens[$cursor]['text'];
+			if ($text === '(') {
+				$depth++;
+				if ($depth === 1) {
+					continue;
+				}
+			}
+			if ($text === ')') {
+				$depth--;
+				if ($depth === 0) {
+					break;
+				}
+			}
+			$parts[] = $text;
+		}
+		$calls[] = implode(' ', $parts);
+	}
+	return $calls;
+}
+
+/**
+ * Every header() call in $files that names something from the request itself,
+ * as "<file>: <call>" lines.
+ *
+ * A destination built from the request's Host header is a destination the
+ * request chooses, which is the defect this check exists to keep out.
+ */
+function mcm_request_derived_headers(array $files, $root)
+{
+	$found = array();
+
+	foreach ($files as $file) {
+		foreach (mcm_header_calls($file) as $call) {
+			if (preg_match('/HTTP_HOST|SERVER_NAME|HTTP_X_FORWARDED_HOST/', $call)) {
+				$name = strpos($file, $root) === 0 ? substr($file, strlen($root) + 1) : $file;
+				$found[] = $name . ': ' . $call;
+			}
+		}
+	}
+	return $found;
+}
+
+/**
+ * Count "new <Class>" expressions naming a class, ignoring comments.
+ *
+ * Reading tokens rather than text matters as much here as it does for
+ * mcm_count_calls(): several files talk about PDO in prose.
+ */
+function mcm_count_new($file, $class)
+{
+	$tokens = mcm_tokens($file);
+	$count  = 0;
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_NEW || !isset($tokens[$index + 1])) {
+			continue;
+		}
+		$next = $tokens[$index + 1];
+		if ($next['id'] === T_STRING && strcasecmp($next['text'], $class) === 0) {
+			$count++;
+		}
+	}
+	return $count;
+}
+
+/**
+ * Count reads of a bare constant, such as DB_PASS.
+ *
+ * A constant looks like any other T_STRING, so the things it is not have to be
+ * excluded: a function call, a method or class member, and a declaration. The
+ * name inside define('DB_PASS', ...) is a quoted string and is not counted,
+ * which is what keeps the configuration files out of the result.
+ */
+function mcm_count_constant_reads($file, $name)
+{
+	$tokens = mcm_tokens($file);
+	$count  = 0;
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_STRING || strcmp($token['text'], $name) !== 0) {
+			continue;
+		}
+		if (isset($tokens[$index + 1]) && $tokens[$index + 1]['text'] === '(') {
+			continue;
+		}
+		if (isset($tokens[$index - 1])) {
+			$previous = $tokens[$index - 1]['id'];
+			if ($previous === T_FUNCTION || $previous === T_OBJECT_OPERATOR || $previous === T_DOUBLE_COLON || $previous === T_NEW || $previous === T_CONST) {
+				continue;
+			}
+		}
+		$count++;
+	}
+	return $count;
+}
+
+/**
+ * Count calls to the functions that dump a value straight into the response.
+ *
+ * These are what turned a failed query into a page full of driver detail, so
+ * application code may not call them at all. The return-a-string forms, such
+ * as print_r($value, true), are refused with the rest: nothing in this
+ * application needs one, and allowing them would mean judging each call site.
+ */
+function mcm_count_debug_output($file)
+{
+	$count = 0;
+	foreach (array('var_dump', 'print_r', 'var_export', 'debug_zval_dump', 'debug_print_backtrace') as $function) {
+		$count += mcm_count_calls($file, $function);
+	}
+	return $count;
+}
+
 /** Every PHP file in the project, excluding this test suite. */
 function mcm_php_sources($root)
 {
@@ -242,6 +463,60 @@ function mcm_php_sources($root)
 			} elseif (substr($entry, -4) === '.php') {
 				$found[] = $path;
 			}
+		}
+	}
+
+	sort($found);
+	return $found;
+}
+
+/** Every web-server rule file in the project. */
+function mcm_htaccess_files($root)
+{
+	$found = array();
+	$queue = array($root);
+
+	while (count($queue) > 0) {
+		$directory = array_shift($queue);
+		foreach (scandir($directory) as $entry) {
+			if ($entry === '.' || $entry === '..' || $entry === '.git' || $entry === 'tests') {
+				continue;
+			}
+			$path = $directory . '/' . $entry;
+			if (is_dir($path)) {
+				$queue[] = $path;
+			} elseif ($entry === '.htaccess') {
+				$found[] = $path;
+			}
+		}
+	}
+
+	sort($found);
+	return $found;
+}
+
+/**
+ * Files that would put an HSTS header on a response, as project-relative names.
+ *
+ * Comments are not code, and this distinction is the point: the configuration
+ * example explains in prose why the site does not send this header, and saying
+ * so must not read as sending it. PHP is taken through the tokenizer, which
+ * drops comments, and comment lines are stripped from the web-server rules.
+ */
+function mcm_hsts_sources($root)
+{
+	$found = array();
+
+	foreach (mcm_php_sources($root) as $file) {
+		if (stripos(mcm_flat_source($file), 'Strict-Transport-Security') !== false) {
+			$found[] = substr($file, strlen($root) + 1);
+		}
+	}
+
+	foreach (mcm_htaccess_files($root) as $file) {
+		$rules = preg_replace('/^\s*#.*$/m', '', file_get_contents($file));
+		if (stripos($rules, 'Strict-Transport-Security') !== false) {
+			$found[] = substr($file, strlen($root) + 1);
 		}
 	}
 
