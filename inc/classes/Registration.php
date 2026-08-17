@@ -57,6 +57,9 @@ class Registration
 
     /**
      * Checks if database connection is opened and open it if not
+     *
+     * The connection comes from the shared bootstrap, which logs why it failed.
+     * The visitor is told only that there is a database problem.
      */
     private function databaseConnection()
     {
@@ -64,15 +67,15 @@ class Registration
         if ($this->db_connection != null) {
             return true;
         } else {
-            // create a database connection, using the constants from config/config.php
-            try {
-                $this->db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
-                return true;
-            // If an error is catched, database connection failed
-            } catch (PDOException $e) {
+            // the credentials live in config/config.php, which only the
+            // bootstrap reads
+            $this->db_connection = mcm_db_connect('registration');
+            // If the connection could not be opened, registration cannot go on
+            if ($this->db_connection === null) {
                 $this->errors[] = $this->lang['Database error'];
                 return false;
             }
+            return true;
         }
     }
 

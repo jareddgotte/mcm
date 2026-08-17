@@ -68,6 +68,77 @@ function mcm_count_calls($file, $function)
 	return $count;
 }
 
+/**
+ * Count "new <Class>" expressions naming a class, ignoring comments.
+ *
+ * Reading tokens rather than text matters as much here as it does for
+ * mcm_count_calls(): several files talk about PDO in prose.
+ */
+function mcm_count_new($file, $class)
+{
+	$tokens = mcm_tokens($file);
+	$count  = 0;
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_NEW || !isset($tokens[$index + 1])) {
+			continue;
+		}
+		$next = $tokens[$index + 1];
+		if ($next['id'] === T_STRING && strcasecmp($next['text'], $class) === 0) {
+			$count++;
+		}
+	}
+	return $count;
+}
+
+/**
+ * Count reads of a bare constant, such as DB_PASS.
+ *
+ * A constant looks like any other T_STRING, so the things it is not have to be
+ * excluded: a function call, a method or class member, and a declaration. The
+ * name inside define('DB_PASS', ...) is a quoted string and is not counted,
+ * which is what keeps the configuration files out of the result.
+ */
+function mcm_count_constant_reads($file, $name)
+{
+	$tokens = mcm_tokens($file);
+	$count  = 0;
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_STRING || strcmp($token['text'], $name) !== 0) {
+			continue;
+		}
+		if (isset($tokens[$index + 1]) && $tokens[$index + 1]['text'] === '(') {
+			continue;
+		}
+		if (isset($tokens[$index - 1])) {
+			$previous = $tokens[$index - 1]['id'];
+			if ($previous === T_FUNCTION || $previous === T_OBJECT_OPERATOR || $previous === T_DOUBLE_COLON || $previous === T_NEW || $previous === T_CONST) {
+				continue;
+			}
+		}
+		$count++;
+	}
+	return $count;
+}
+
+/**
+ * Count calls to the functions that dump a value straight into the response.
+ *
+ * These are what turned a failed query into a page full of driver detail, so
+ * application code may not call them at all. The return-a-string forms, such
+ * as print_r($value, true), are refused with the rest: nothing in this
+ * application needs one, and allowing them would mean judging each call site.
+ */
+function mcm_count_debug_output($file)
+{
+	$count = 0;
+	foreach (array('var_dump', 'print_r', 'var_export', 'debug_zval_dump', 'debug_print_backtrace') as $function) {
+		$count += mcm_count_calls($file, $function);
+	}
+	return $count;
+}
+
 /** Every PHP file in the project, excluding this test suite. */
 function mcm_php_sources($root)
 {

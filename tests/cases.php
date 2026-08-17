@@ -3,10 +3,11 @@
 /**
  * The cases.
  *
- * Six groups, matching the six things the shared bootstrap is responsible for:
+ * Seven groups, matching what the shared bootstrap is responsible for:
  * configuration, a single session startup, the session cookie's attributes,
  * compatibility with sessions and remember-me cookies that already exist, error
- * handling, and every entry point loading the bootstrap.
+ * handling, what a database failure does to a request, and every entry point
+ * loading the bootstrap.
  *
  * The machinery they are written against lives in tests/run.php.
  */
@@ -366,6 +367,22 @@ t_group('error handling', function () {
 		t_lacks('Uncaught', $response['log'], 'the compile-time fatal never reaches the exception handler');
 		t_lacks('Cannot redeclare', $response['body'], 'the shutdown handler tells the client nothing about the fatal');
 
+		// A trace is logged for the frames it names, not for the arguments those
+		// frames were called with: a login frame carries a visitor's password
+		// and a connection frame carries the database's.
+		$response = mcm_http($server, '/fault_trace_args.php');
+		t_same(500, $response['status'], 'a failure inside a call with secret arguments fails the request');
+		t_same(mcm_generic_message(), $response['body'], 'a failure inside a call with secret arguments says nothing to the client');
+		t_contains('the database went away mid-login', $response['log'], 'the failure itself is logged');
+		t_contains('mcm_signs_someone_in', $response['log'], 'the trace still names the frame that failed');
+		t_lacks($seed, $response['log'], 'the arguments that frame was called with are not logged');
+
+		// ... and the scrubber that covers runtimes which cannot drop them.
+		$response = mcm_http($server, '/probe_scrub.php');
+		t_contains('Login->loginWithPostData', $response['body'], 'scrubbing a trace keeps the frame');
+		t_contains("'...'", $response['body'], 'scrubbing a trace replaces the arguments');
+		t_lacks($seed, $response['body'], 'scrubbing a trace removes the secret argument');
+
 		// A warning is not a reason to stop serving a page that used to work.
 		$response = mcm_http($server, '/fault_warning.php');
 		t_same(200, $response['status'], 'a warning does not fail the request');
@@ -400,7 +417,167 @@ t_group('error handling', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 6. Entry-point inclusion
+ * 6. Database failures
+ * ---------------------------------------------------------------------------
+ *
+ * No database is involved in running these: an outage is simulated by pointing
+ * the configuration at an address nothing is listening on, which is the same
+ * thing the driver sees when the real server is down.
+ */
+
+t_group('database failure', function () {
+	// Distinctive enough that finding it anywhere means it came from here.
+	$password = 'db-password-must-never-be-logged';
+
+	// Port 1 is privileged, so nothing in this suite can be listening on it and
+	// the connection is refused immediately. DB_HOST reaches the DSN verbatim,
+	// which is what lets a port be pinned without inventing a second setting.
+	$fixture = mcm_fixture('db-outage', array('config' => array(
+		'DB_HOST' => '127.0.0.1;port=1',
+		'DB_PASS' => $password,
+	)));
+
+	$server = mcm_server_start($fixture);
+	try {
+		// 1. A page that cannot be served without the database.
+		$response = mcm_http($server, '/probe_db.php');
+
+		t_same(500, $response['status'], 'an outage: the response says the request failed');
+		t_same(mcm_generic_message(), $response['body'], 'an outage: the client gets the generic message and nothing else');
+		t_same(1, substr_count($response['body'], 'Sorry'), 'an outage: exactly one failure body is sent');
+		t_lacks('the query would run here', $response['body'], 'an outage: the request stops before the query runs');
+
+		// The failure modes the acceptance criteria name, one assertion each.
+		$leaks = array(
+			'SQLSTATE'           => 'no driver error code',
+			'Connection refused' => 'no driver message',
+			'mysql:host'         => 'no connection string',
+			'127.0.0.1'          => 'no database address',
+			$password            => 'no database password',
+			'#0 '                => 'no stack trace',
+			'bootstrap.php'      => 'no server-side path',
+		);
+		foreach ($leaks as $needle => $description) {
+			t_lacks($needle, $response['body'], 'an outage: the response carries ' . $description);
+		}
+
+		// What the log has to keep, so an outage can still be diagnosed.
+		t_contains('Database error', $response['log'], 'an outage: the log classifies the failure');
+		t_contains('probe_db', $response['log'], 'an outage: the log names what the connection was for');
+		t_contains('SQLSTATE[HY000] [2002]', $response['log'], "an outage: the log keeps the driver's own message");
+
+		// ... and what it must not keep, however useful it would be.
+		t_lacks($password, $response['log'], 'an outage: the password is not logged');
+		t_lacks('mysql:host', $response['log'], 'an outage: the connection string is not logged');
+		t_lacks('PDO->__construct', $response['log'], 'an outage: the connection frame is not logged');
+
+		// 2. The failure must not turn into a different failure while being
+		// handled. Carrying on with a connection that is not one used to raise
+		// "Call to a member function prepare() on bool", which replaced the real
+		// cause in the log and is the shape this case exists to rule out.
+		t_lacks('Call to a member function', $response['log'], 'an outage: no second failure is raised while handling the first');
+		t_contains('connection failed', $response['log'], 'an outage: the log holds the cause, not a knock-on error');
+		t_lacks('Uncaught', $response['log'], 'an outage: the failure is handled, not left to the exception handler');
+
+		// 3. The non-fatal shape, which the login and registration code needs.
+		$response = mcm_http($server, '/probe_db_soft.php');
+
+		t_same(200, $response['status'], 'a caller that handles the outage itself still gets a page');
+		t_contains('connection=null', $response['body'], 'a failed connection is reported as null');
+		t_contains('request completed', $response['body'], 'a failed connection does not stop the caller');
+		t_contains('SQLSTATE[HY000] [2002]', $response['log'], 'a failed connection is logged anyway');
+		t_lacks('SQLSTATE', $response['body'], 'a failed connection tells the client nothing');
+		t_lacks($password, $response['body'], 'a failed connection does not put the password on the page');
+
+		// 4. A real entry point, end to end. rename_list.php is the smallest of
+		// them: two parameters, one connection, one query.
+		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything');
+
+		t_same(500, $response['status'], 'a real page during an outage: the response says the request failed');
+		t_same(mcm_generic_message(), $response['body'], 'a real page during an outage: the client gets the generic message and nothing else');
+		t_lacks('SQLSTATE', $response['body'], 'a real page during an outage: no driver message reaches the client');
+		t_lacks($password, $response['body'], 'a real page during an outage: no credential reaches the client');
+		t_lacks('greatsuccess', $response['body'], 'a real page during an outage: the page does not claim it worked');
+		t_lacks('UPDATE movie_lists', $response['body'], 'a real page during an outage: no query text reaches the client');
+		t_contains('rename_list', $response['log'], 'a real page during an outage: the log names the page');
+		t_contains('SQLSTATE[HY000] [2002]', $response['log'], 'a real page during an outage: the cause is logged');
+		t_lacks('Call to a member function', $response['log'], 'a real page during an outage: no knock-on failure');
+
+		// A page that never reaches the database is unaffected by the outage.
+		$response = mcm_http($server, '/rename_list.php');
+		t_same(200, $response['status'], 'a page that stops on its own input check is unaffected');
+		t_contains('No movie list id given', $response['body'], 'the input check still answers');
+	} catch (Exception $exception) {
+		t_ok(false, 'the database failure cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// The same failure from a command line process, where there are no headers
+	// to send and the exit status is what reports it.
+	$result = mcm_cli($fixture, 'probe_db.php');
+	t_ok($result['status'] !== 0, 'an outage fails the request off the web as well');
+	t_same(mcm_generic_message(), $result['stdout'], 'an outage off the web says nothing more either');
+
+	/* Whole-source checks ---------------------------------------------------- */
+
+	// One place builds a connection, so one place has to be careful with the
+	// credentials - and it is the place whose failure handling is tested above.
+	$connectors = array();
+	$total      = 0;
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		$count = mcm_count_new($file, 'PDO');
+		if ($count > 0) {
+			$connectors[] = substr($file, strlen(MCM_REPO_ROOT) + 1) . ' (' . $count . ')';
+		}
+		$total += $count;
+	}
+	t_same(1, $total, 'the whole application opens a database connection in exactly one place');
+	t_same(array('inc/bootstrap.php (1)'), $connectors, 'the one place is the bootstrap');
+
+	// The password is read where the connection is opened and nowhere else.
+	$readers = array();
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		if (mcm_count_constant_reads($file, 'DB_PASS') > 0) {
+			$readers[] = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		}
+	}
+	t_same(array('inc/bootstrap.php'), $readers, 'the database password is read in one file only');
+
+	// Nothing dumps a value into the response any more. This is the check that
+	// would have caught the original var_dump($errors) lines.
+	$dumpers = array();
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		$count = mcm_count_debug_output($file);
+		if ($count > 0) {
+			$dumpers[] = substr($file, strlen(MCM_REPO_ROOT) + 1) . ' (' . $count . ')';
+		}
+	}
+	t_same(array(), $dumpers, 'no application code dumps a value into the response');
+
+	// The checks above have to have teeth, so they are pointed at copies that
+	// reintroduce exactly what was removed. Nothing here touches the checkout.
+	$scratch = $fixture['public'] . '/regression_check.php';
+
+	file_put_contents($scratch, "<?php\n\n// A page that talks about new PDO in a comment.\n\$x = 1;\n");
+	t_same(0, mcm_count_new($scratch, 'PDO'), 'the connection check reads code, not comments');
+
+	file_put_contents($scratch, "<?php\n\n\$db = new PDO('mysql:host=' . DB_HOST, DB_USER, DB_PASS);\n");
+	t_same(1, mcm_count_new($scratch, 'PDO'), 'the connection check finds a hand-rolled connection');
+	t_same(1, mcm_count_constant_reads($scratch, 'DB_PASS'), 'the password check finds a second reader');
+
+	file_put_contents($scratch, "<?php\n\n// var_dump(\$errors) in a comment is not a call.\ndefine('DB_PASS', 'x');\n");
+	t_same(0, mcm_count_debug_output($scratch), 'the debug-output check reads code, not comments');
+	t_same(0, mcm_count_constant_reads($scratch, 'DB_PASS'), 'defining the password is not reading it');
+
+	file_put_contents($scratch, "<?php\n\nvar_dump(\$errors);\nprint_r(\$errors);\n");
+	t_same(2, mcm_count_debug_output($scratch), 'the debug-output check finds a reintroduced dump');
+
+	unlink($scratch);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 7. Entry-point inclusion
  * ---------------------------------------------------------------------------
  */
 
