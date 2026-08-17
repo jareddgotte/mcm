@@ -8,7 +8,11 @@ $list_name = (isset($_POST['list_name'])) ? $_POST['list_name'] : ((isset($_GET[
 $list_description = (isset($_POST['list_description'])) ? $_POST['list_description'] : ((isset($_GET['list_description'])) ? $_GET['list_description'] : '');
 $list_rank = (isset($_POST['list_rank'])) ? $_POST['list_rank'] : ((isset($_GET['list_rank'])) ? $_GET['list_rank'] : '');
 
-if ($list_name === '') { echo 'Error: No list name given.'; exit(); }
+// Bounded validation of the submitted name, before anything is stored. It only
+// rejects; it never rewrites what was typed, and names already in the database
+// are left exactly as they are.
+$list_name_error = mcm_list_name_error($list_name);
+if ($list_name_error !== '') { echo 'Error: ' . $list_name_error; exit(); }
 if ($list_rank === '') { echo 'Error: No list rank given.'; exit(); }
 // Optional:
 //if ($list_description === '') { echo 'Error: No list description given.'; exit(); }

@@ -8,7 +8,7 @@
 <meta name="description" content="">
 <meta name="keywords" content="">
 <meta name="author" content="Jared Gotte">
-<title><?php echo (isset($title)) ? "MCM - $title" : 'Movie Collection Manager'; ?></title>
+<title><?php echo (isset($title)) ? 'MCM - ' . mcm_html($title) : 'Movie Collection Manager'; ?></title>
 
 <!--link rel="shortcut icon" href="favicon.ico"-->
 <?php if (isset($pre_styles)) foreach ($pre_styles as $v) printf("<link rel=\"stylesheet\" href=\"css/%s.css\">\n", $v); ?>
@@ -55,7 +55,7 @@
 				<ul class="nav navbar-nav navbar-right">
 					<li' . (($nav_active == 'About') ? ' class="active"' : '') . '><a href="about.php">About</a></li>
 					<li class="dropdown">
-						<a class="dropdown-toggle" data-toggle="dropdown" href="#">' . ((isset($_SESSION['user_name'])) ? $_SESSION['user_name'] : '') . ' <span class="caret"></span></a>
+						<a class="dropdown-toggle" data-toggle="dropdown" href="#">' . ((isset($_SESSION['user_name'])) ? mcm_html($_SESSION['user_name']) : '') . ' <span class="caret"></span></a>
 						<ul class="dropdown-menu">
 							<li' . (($nav_active == 'Account') ? ' class="active"' : '') . '><a href="edit.php">Account</a></li>
 							<li class="divider"></li>

@@ -17,10 +17,13 @@
  * Four cover inc/guards.php: what each guard allows, what it refuses, what a
  * refusal is allowed to say, and the fact that nothing calls any of it yet.
  *
- * The last group is optional and is the only one that needs anything beyond a
- * PHP CLI: given a database server binary it runs a private, throw-away server
- * and drives the authentication paths against the tracked schema. Without one
- * it skips loudly and says what that leaves uncovered.
+ * One group is optional and is the only one that needs anything beyond a PHP
+ * CLI: given a database server binary it runs a private, throw-away server and
+ * drives the authentication paths against the tracked schema. Without one it
+ * skips loudly and says what that leaves uncovered.
+ *
+ * The last two cover what the bootstrap's escaping helpers do with a hostile
+ * string, and the bounded validation a submitted list name has to pass.
  *
  * The machinery they are written against lives in tests/run.php, and the
  * database group's own in tests/database.php.
@@ -2061,4 +2064,248 @@ t_group('real database', function () {
 		t_ok(false, 'the real-database cases ran', $exception->getMessage());
 	}
 	mcm_server_stop($server_handle);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 17. Escaping what the server renders
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('output escaping', function () {
+	// One string that is hostile in all four destinations at once: it closes a
+	// script element, opens its own, ends an attribute, and carries a scheme
+	// separator and a slash for the URL case.
+	$payload = '</script><script id="pwned">alert("1&2")</script>"><img src=x onerror=alert(1)> javascript:/x';
+	// A list id is rendered into an attribute and into the tab's href, so it
+	// gets a payload of its own rather than riding on the name's.
+	$listId  = '7" onmouseover="alert(1)';
+
+	$fixture = mcm_fixture('escaping');
+	$server  = mcm_server_start($fixture);
+
+	try {
+		$response = mcm_http($server, '/escape.php?payload=' . rawurlencode($payload) . '&list_id=' . rawurlencode($listId));
+		$body     = $response['body'];
+
+		t_same(200, $response['status'], 'the escaping probe renders');
+		t_same('', $response['log'], 'rendering a hostile string logs nothing');
+
+		$xpath = mcm_dom($body);
+		if ($xpath === null) {
+			t_skip('the rendered contexts are parsed as HTML', 'this PHP has no DOM extension');
+		} else {
+			// Text context: the payload comes back as the text of one element,
+			// character for character, and built no markup on the way.
+			$text = mcm_element($xpath, 'text');
+			t_ok($text !== null, 'the text context element is in the document');
+			t_same($payload, $text === null ? '' : $text->textContent, 'a hostile string renders as literal text');
+			t_same(0, $text === null ? -1 : $text->getElementsByTagName('*')->length, 'the text context grew no child elements');
+
+			// Attribute context: the payload is the whole attribute value, so it
+			// neither ended the attribute nor started another one.
+			$attr = mcm_element($xpath, 'attr');
+			t_ok($attr !== null, 'the attribute context element is in the document');
+			t_same($payload, $attr === null ? '' : $attr->getAttribute('alt'), 'a hostile string renders as one attribute value');
+			t_same('', $attr === null ? 'missing' : $attr->getAttribute('onerror'), 'the attribute context grew no event handler');
+
+			// URL context: the payload survives as one query value and nothing
+			// else - not a second parameter, not a scheme of its own.
+			$link  = mcm_element($xpath, 'url');
+			$href  = $link === null ? '' : $link->getAttribute('href');
+			$query = array();
+			parse_str(parse_url($href, PHP_URL_QUERY), $query);
+			t_same('https', parse_url($href, PHP_URL_SCHEME), 'the link keeps the scheme the page gave it');
+			t_same($payload, isset($query['q']) ? $query['q'] : '', 'a hostile string survives as one query value');
+			t_same('1', isset($query['t']) ? $query['t'] : '', 'the parameter after it is still its own parameter');
+
+			// The tab strip both pages render, with a hostile name and a hostile
+			// list id.
+			$tabs  = mcm_element($xpath, 'tabs');
+			$items = $tabs === null ? null : $tabs->getElementsByTagName('li');
+			t_same(1, $items === null ? -1 : $items->length, 'the tab strip holds exactly one tab');
+			if ($items !== null && $items->length > 0) {
+				$item   = $items->item(0);
+				$anchor = $item->getElementsByTagName('a')->item(0);
+				t_same($listId, $item->getAttribute('data-listid'), 'the list id is one attribute value');
+				t_same('', $item->getAttribute('onmouseover'), 'the list id grew no event handler');
+				t_same($payload, $anchor === null ? '' : $anchor->textContent, 'the list name is the literal text of the tab');
+				t_same('#' . rawurlencode($listId), $anchor === null ? '' : $anchor->getAttribute('href'), 'the tab links to the encoded list id');
+			}
+
+			$panes = mcm_element($xpath, 'panes');
+			$pane  = $panes === null ? null : $panes->getElementsByTagName('div')->item(0);
+			t_same($listId, $pane === null ? '' : $pane->getAttribute('id'), 'the pane id is one attribute value');
+
+			// Script context: the payload never closed the script element, so the
+			// document has the one script the page wrote and no other.
+			$scripts = $xpath->query('//script');
+			t_same(1, $scripts->length, 'the page has exactly one script element');
+			t_ok(mcm_element($xpath, 'pwned') === null, 'the payload started no element of its own');
+		}
+
+		// Read off the raw response as well: whatever a parser makes of it, the
+		// bytes that would end the script or the attribute are not there.
+		t_same(1, substr_count($body, '</script>'), 'nothing closed the script element early');
+		t_lacks('<img src=x', $body, 'no tag from the payload reaches the page');
+		t_lacks('<script id=', $body, 'the payload opens no script element of its own');
+		t_contains('\\u003C', $body, 'the script block carries the payload as escaped JSON');
+		t_contains('\\u0026', $body, 'the ampersand in the payload is escaped in the script block too');
+
+		// Non-ASCII text is escaped, not mangled: this changes rendering only.
+		$accented = "Amélie's <b>π</b> list";
+		$response = mcm_http($server, '/escape.php?payload=' . rawurlencode($accented) . '&list_id=3');
+		$xpath    = mcm_dom($response['body']);
+		if ($xpath === null) {
+			t_skip('a non-ASCII name survives rendering', 'this PHP has no DOM extension');
+		} else {
+			$text = mcm_element($xpath, 'text');
+			t_same($accented, $text === null ? '' : $text->textContent, 'a non-ASCII name renders unchanged as text');
+		}
+		t_lacks('<b>', $response['body'], 'markup inside a non-ASCII name is still escaped');
+	} catch (Exception $exception) {
+		t_ok(false, 'the escaping cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// Both pages that render the tab strip render it through the shared helper,
+	// so neither can drift back to building the markup by hand.
+	foreach (array('inc/views/logged_in.php', 'inc/views/share.php') as $view) {
+		$path = MCM_REPO_ROOT . '/' . $view;
+		t_same(1, mcm_count_calls($path, 'mcm_list_tab_html'), $view . ' renders its tabs through the shared helper');
+		t_same(1, mcm_count_calls($path, 'mcm_list_pane_html'), $view . ' renders its panes through the shared helper');
+		t_lacks('data-listid', file_get_contents($path), $view . ' builds no tab markup of its own');
+		t_same(0, mcm_count_calls($path, 'json_encode'), $view . ' embeds its data through mcm_js() rather than raw JSON');
+	}
+
+	// Every page that renders: no request value reaches the markup unescaped.
+	$rendering = array_merge(mcm_entry_points(MCM_REPO_ROOT), glob(MCM_REPO_ROOT . '/inc/views/*.php'));
+	foreach ($rendering as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		t_same(array(), mcm_escaping_problems($file), $name . ' reads no request value outside a statement that names an escaping helper');
+	}
+
+	// The check has to have teeth, so it is pointed at deliberately broken
+	// copies. Nothing here touches the checkout.
+	$fixture = mcm_fixture('escaping-checks');
+	$broken  = array(
+		'a value echoed into markup' => array(
+			'source'  => "<?php\n\necho '<p>' . \$_GET['q'] . '</p>';\n",
+			'problem' => '$_GET is rendered without an escaping helper',
+		),
+		'a value printed through printf' => array(
+			'source'  => "<?php\n\nprintf('<p>%s</p>', \$_SESSION['user_name']);\n",
+			'problem' => '$_SESSION is rendered without an escaping helper',
+		),
+		'a value concatenated into markup first' => array(
+			'source'  => "<?php\n\n\$html = '<p>' . \$_POST['q'] . '</p>';\necho \$html;\n",
+			'problem' => '$_POST is rendered without an escaping helper',
+		),
+		'a value echoed straight from a template' => array(
+			'source'  => "<p><?php echo \$_GET['q']; ?></p>\n",
+			'problem' => '$_GET is rendered without an escaping helper',
+		),
+		// The escaper is on the wrong value: a check that only asked whether the
+		// statement mentions an escaper anywhere would accept this.
+		'a statement that escapes a different value' => array(
+			'source'  => "<?php\n\necho mcm_html(\$title) . '<p>' . \$_GET['q'] . '</p>';\n",
+			'problem' => '$_GET is rendered without an escaping helper',
+		),
+	);
+
+	foreach ($broken as $description => $case) {
+		$path = $fixture['public'] . '/broken_escaping.php';
+		file_put_contents($path, $case['source']);
+		t_contains($case['problem'], implode(' | ', mcm_escaping_problems($path)), 'the check rejects ' . $description);
+	}
+
+	// And it has to stay quiet about the things that are not rendering, or the
+	// application could not keep reading its own request values.
+	$clean = array(
+		'an escaped value'             => "<?php\n\necho mcm_html(\$_GET['q']);\n",
+		'a value escaped for a URL'    => "<?php\n\nprintf('<a href=\"?q=%s\">go</a>', mcm_url(\$_GET['q']));\n",
+		'a value escaped for a script' => "<?php\n\necho '<script>var q = ' . mcm_js(\$_GET['q']) . '</script>';\n",
+		'reading a request value'      => "<?php\n\n\$q = (isset(\$_GET['q'])) ? \$_GET['q'] : '';\n",
+		'binding a request value'      => "<?php\n\n\$query->bindValue(':user_id', \$_SESSION['user_id'], PDO::PARAM_INT);\n",
+	);
+
+	foreach ($clean as $description => $source) {
+		$path = $fixture['public'] . '/clean_escaping.php';
+		file_put_contents($path, $source);
+		t_same(array(), mcm_escaping_problems($path), 'the check accepts ' . $description);
+	}
+	unlink($fixture['public'] . '/broken_escaping.php');
+	unlink($fixture['public'] . '/clean_escaping.php');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 18. Bounded validation of a submitted list name
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('list name validation', function () {
+	$fixture = mcm_fixture('list-names');
+	$report  = mcm_report(mcm_cli($fixture, 'list_name.php')['stdout']);
+
+	// Accepted. Markup and quotes are names like any other: they are stored as
+	// typed, and it is the rendering that makes them harmless.
+	$accepted = array('plain', 'markup', 'quotes', 'accented', 'emoji', 'sixty_four', 'sixty_four_mb');
+	foreach ($accepted as $name) {
+		t_same('', isset($report[$name]) ? $report[$name] : '(absent)', 'a ' . str_replace('_', ' ', $name) . ' list name is accepted');
+	}
+
+	// Rejected, each for its own stated reason.
+	$rejected = array(
+		'empty'        => 'No list name given.',
+		'spaces_only'  => 'No list name given.',
+		'sixty_five'   => 'List name is longer than 64 characters.',
+		'newline'      => 'List name contains a control character.',
+		'null_byte'    => 'List name contains a control character.',
+		'invalid_utf8' => 'List name is not valid UTF-8.',
+	);
+	foreach ($rejected as $name => $reason) {
+		t_same($reason, isset($report[$name]) ? $report[$name] : '(absent)', 'a ' . str_replace('_', ' ', $name) . ' list name is refused');
+	}
+
+	// The two pages that write a list name run that validation before they touch
+	// the database, so the refusal is observable without one.
+	$server = mcm_server_start($fixture);
+	try {
+		$long = str_repeat('a', 65);
+		foreach (array('create_list.php?list_rank=0&list_name=', 'rename_list.php?movie_list_id=1&list_name=') as $path) {
+			$page     = substr($path, 0, strpos($path, '?'));
+			$response = mcm_http($server, '/' . $path . rawurlencode($long));
+
+			t_same(200, $response['status'], $page . ' answers a name that is too long');
+			t_same('Error: List name is longer than 64 characters.', $response['body'], $page . ' refuses a name that is too long');
+			t_same('', $response['log'], $page . ' never reached the database');
+
+			// A name full of markup is not what validation is for: it goes
+			// through, and gets as far as the database this fixture has none of.
+			$response = mcm_http($server, '/' . $path . rawurlencode('<script>alert(1)</script>'));
+			t_lacks('Error: List name', $response['body'], $page . ' stores a name containing markup rather than refusing it');
+			t_contains('mcm', $response['log'], $page . ' got past validation and on to the database');
+		}
+	} catch (Exception $exception) {
+		t_ok(false, 'the list name cases ran over HTTP', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// Validation rejects; it never rewrites. Nothing on the write path may edit
+	// the value on its way into the database, or an existing name would come
+	// back changed the next time its list was renamed.
+	$rewriters = array('htmlspecialchars', 'htmlentities', 'strip_tags', 'preg_replace', 'str_replace', 'filter_var');
+	foreach (array('create_list.php', 'rename_list.php') as $page) {
+		foreach ($rewriters as $rewriter) {
+			t_same(0, mcm_count_calls(MCM_REPO_ROOT . '/' . $page, $rewriter), $page . ' does not ' . $rewriter . '() the submitted name');
+		}
+	}
+
+	$validation = mcm_function_source(MCM_REPO_ROOT . '/inc/bootstrap.php', 'mcm_list_name_error');
+	t_ok($validation !== '', 'the validation function was found in the bootstrap');
+	foreach ($rewriters as $rewriter) {
+		t_lacks($rewriter, $validation, 'the validation does not ' . $rewriter . '() the name it is given');
+	}
+	t_contains('preg_match', $validation, 'the validation matches the name rather than rewriting it');
 });

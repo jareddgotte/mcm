@@ -613,6 +613,40 @@ function mcm_cookie_value(array $response, $name)
 	return $value;
 }
 
+/**
+ * Parse a response body as HTML, so a case can ask what the browser would
+ * actually build rather than which characters happen to be in the response.
+ *
+ * @return DOMXPath|null null when this PHP has no DOM extension
+ */
+function mcm_dom($html)
+{
+	if (!class_exists('DOMDocument')) {
+		return null;
+	}
+
+	$document = new DOMDocument();
+	$previous = libxml_use_internal_errors(true);
+	// The page declares UTF-8 in a meta tag, but libxml only believes an
+	// encoding it sees ahead of the markup.
+	$document->loadHTML('<?xml encoding="UTF-8">' . $html);
+	libxml_clear_errors();
+	libxml_use_internal_errors($previous);
+
+	return new DOMXPath($document);
+}
+
+/** The element with this id, or null. */
+function mcm_element($xpath, $id)
+{
+	if ($xpath === null) {
+		return null;
+	}
+	$found = $xpath->query('//*[@id="' . $id . '"]');
+
+	return ($found->length > 0) ? $found->item(0) : null;
+}
+
 /** Parse a probe page's "key=value" report into an array. */
 function mcm_report($output)
 {

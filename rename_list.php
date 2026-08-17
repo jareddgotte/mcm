@@ -8,7 +8,11 @@ $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((
 $list_name = (isset($_POST['list_name'])) ? $_POST['list_name'] : ((isset($_GET['list_name'])) ? $_GET['list_name'] : '');
 
 if ($movie_list_id === '') { echo 'Error: No movie list id given.'; exit(); }
-if ($list_name === '') { echo 'Error: No movie id given.'; exit(); }
+// Bounded validation of the submitted name, before anything is stored. It only
+// rejects; it never rewrites what was typed, and the name already on this list
+// is left exactly as it is unless a valid new one replaces it.
+$list_name_error = mcm_list_name_error($list_name);
+if ($list_name_error !== '') { echo 'Error: ' . $list_name_error; exit(); }
 // Optional:
 //if ($tmdb_original_title === '') { echo 'Error: No movie original title given.'; exit(); }
 //if ($tmdb_poster_path === '') { echo 'Error: No movie poster path given.'; exit(); }

@@ -498,6 +498,150 @@ function mcm_db_execute($statement, $context)
 
 /*
  * ---------------------------------------------------------------------------
+ * Output escaping
+ * ---------------------------------------------------------------------------
+ *
+ * Every string the server renders that it did not write itself - a list name, a
+ * username, anything TMDb sent back - goes through one of these on its way out.
+ * Which one depends on where the value lands, because the three destinations
+ * have three different sets of dangerous characters:
+ *
+ *   mcm_html()  HTML text, and values inside quoted attributes
+ *   mcm_url()   one component of a URL: a path segment, a query value
+ *   mcm_js()    a value embedded in a <script> block
+ *
+ * None of them changes anything that is stored. They are rendering only, so a
+ * list name that already contains "<b>" keeps that exact form in the database
+ * and simply shows up as those five characters on the page.
+ */
+
+/**
+ * Escape a value for HTML text and for quoted attribute values.
+ *
+ * ENT_QUOTES covers both destinations - it escapes the single and double quotes
+ * that would otherwise end an attribute early - which is why attributes need no
+ * helper of their own. It is never right for a URL or for a script block; those
+ * have mcm_url() and mcm_js().
+ *
+ * @param mixed $value
+ * @return string
+ */
+function mcm_html($value)
+{
+	// ENT_SUBSTITUTE (PHP 5.4+) turns an invalid byte sequence into U+FFFD.
+	// Without it PHP returns an empty string for the whole value instead, which
+	// is the older behaviour this site has always had.
+	$flags = defined('ENT_SUBSTITUTE') ? (ENT_QUOTES | ENT_SUBSTITUTE) : ENT_QUOTES;
+
+	return htmlspecialchars((string) $value, $flags, 'UTF-8');
+}
+
+/**
+ * Escape one component of a URL - a path segment, or a query-string value.
+ *
+ * This is for a piece of a URL the code builds around it, not for a whole URL
+ * somebody else supplied: it percent-encodes ":" and "/" as well, so it can
+ * neither introduce a scheme such as "javascript:" nor climb out of the path
+ * the surrounding literal put it in.
+ *
+ * @param mixed $value
+ * @return string
+ */
+function mcm_url($value)
+{
+	return rawurlencode((string) $value);
+}
+
+/**
+ * Encode a value as JSON for embedding in a <script> block.
+ *
+ * The JSON_HEX_* flags escape <, >, &, ' and ", so no value can close the
+ * script element or break out of the string it sits in. The result includes its
+ * own quotes when the value is a string, so call sites write
+ * "var x = " . mcm_js($x) rather than wrapping it in quotes of their own.
+ *
+ * A value that cannot be encoded - invalid UTF-8, most often - becomes "null".
+ * Emitting nothing at all would leave a syntax error behind and take every
+ * other script on the page down with it.
+ *
+ * @param mixed $value
+ * @return string
+ */
+function mcm_js($value)
+{
+	$json = json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+
+	return ($json === false) ? 'null' : $json;
+}
+
+/**
+ * The markup for one movie-list tab, escaped for the three places a value lands
+ * in it: an attribute, a URL fragment, and the link text.
+ *
+ * Both the authenticated collection page and the public sharing page render
+ * this same tab strip, so they render it from here.
+ *
+ * @param string $list_id
+ * @param string $list_name
+ * @return string
+ */
+function mcm_list_tab_html($list_id, $list_name)
+{
+	return sprintf(
+		"<li data-listid=\"%s\"><a href=\"#%s\" data-toggle=\"pill\">%s</a></li>\n",
+		mcm_html($list_id),
+		mcm_url($list_id),
+		mcm_html($list_name)
+	);
+}
+
+/**
+ * The markup for the empty container one movie-list tab reveals.
+ *
+ * @param string $list_id
+ * @return string
+ */
+function mcm_list_pane_html($list_id)
+{
+	return sprintf("<div class=\"tab-pane\" id=\"%s\"></div>\n", mcm_html($list_id));
+}
+
+/**
+ * Why a submitted list name is unacceptable, or '' when it is fine.
+ *
+ * Bounded validation of what is coming in, and nothing more: names already in
+ * the database are never re-checked and never rewritten. The limits are the
+ * ones the storage and the page already imply - list_name is a varchar(64), and
+ * a control character has no meaning in a tab label. Markup characters stay
+ * allowed on purpose: they are stored as typed and rendered as literal text.
+ *
+ * @param mixed $name the submitted value
+ * @return string an operator-readable reason, or '' when the name is usable
+ */
+function mcm_list_name_error($name)
+{
+	if (!is_string($name) || trim($name) === '') {
+		return 'No list name given.';
+	}
+	// An encoding the page cannot render is not a name. //u makes preg_match
+	// return false - not 0 - when the subject is not valid UTF-8.
+	if (preg_match('//u', $name) !== 1) {
+		return 'List name is not valid UTF-8.';
+	}
+	if (preg_match('/[\x00-\x1F\x7F]/u', $name) === 1) {
+		return 'List name contains a control character.';
+	}
+
+	$length = function_exists('mb_strlen') ? mb_strlen($name, 'UTF-8') : preg_match_all('/./us', $name);
+	if ($length > 64) {
+		return 'List name is longer than 64 characters.';
+	}
+
+	return '';
+}
+
+/*
+ * ---------------------------------------------------------------------------
  * 1. Error behaviour, before anything else
  * ---------------------------------------------------------------------------
  *

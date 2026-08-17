@@ -8,12 +8,12 @@ include('header.php');
 // login form box
 if ($login->errors) {
 	foreach ($login->errors as $error) {
-		printf("<div class=\"alert alert-danger\">%s</div>", $error);
+		printf("<div class=\"alert alert-danger\">%s</div>", mcm_html($error));
 	}
 }
 if ($login->messages) {
 	foreach ($login->messages as $message) {
-		printf("<div class=\"alert alert-info\">%s</div>", $message);
+		printf("<div class=\"alert alert-info\">%s</div>", mcm_html($message));
 	}
 }
 
