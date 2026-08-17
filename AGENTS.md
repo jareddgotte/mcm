@@ -49,7 +49,14 @@ the application. Setup is documented in `README.md`.
   listening on and the driver refuses the connection exactly as it would during
   a real outage.
 - When changing the harness, re-run the mutation sweep rather than trusting a
-  green run: an assertion that cannot fail still passes.
+  green run: an assertion that cannot fail still passes. Response headers are a
+  common way to get a toothless one: the session's own cache limiter already
+  sends `Cache-Control: no-store, no-cache, must-revalidate`, so a substring
+  check for a caching header passes whether or not the code under test set one.
+- Cases that need a POST use `mcm_http_post()`; `mcm_http()` takes the method
+  and the body as its fourth and fifth arguments. The ownership cases build
+  their fixture table in SQLite in memory, and skip where the runtime has no
+  SQLite driver, so the suite still needs no database.
 
 ## Request lifecycle
 
@@ -83,6 +90,16 @@ the application. Setup is documented in `README.md`.
   constant-time comparison, password hashing and session identifier renewal
   live. Login and Registration call it rather than PHP's functions directly, so
   a change to any of that has one place to happen in.
+- `inc/guards.php` holds the reusable request guards - signed-in checks, current
+  user, POST-only, CSRF, movie-list ownership and the fixed JSON refusal bodies.
+  It is declarations only, and nothing loads it yet: an endpoint adopts it
+  deliberately. `php tests/run.php` asserts that no source outside `tests/`
+  includes it, so the first endpoint to adopt a guard also updates that
+  assertion in `tests/cases.php`.
+- A refusal answers with a status from `mcm_json_error_catalogue()` and that
+  status's fixed body, so two different reasons sharing a status cannot be told
+  apart from outside; the reason goes to the log through `mcm_log()`. Tokens are
+  never logged.
 
 ## Database access
 
