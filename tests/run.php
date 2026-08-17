@@ -302,6 +302,19 @@ function mcm_seed_session(array $fixture, $id, array $data)
 	file_put_contents($fixture['sessions'] . '/sess_' . $id, $encoded);
 }
 
+/** The session identifiers the fixture currently has files for, sorted. */
+function mcm_session_files(array $fixture)
+{
+	$found = array();
+	foreach (scandir($fixture['sessions']) as $entry) {
+		if (strpos($entry, 'sess_') === 0) {
+			$found[] = substr($entry, 5);
+		}
+	}
+	sort($found);
+	return $found;
+}
+
 /* Running a fixture --------------------------------------------------------- */
 
 /**
@@ -334,16 +347,23 @@ function mcm_ini_args(array $fixture)
 /**
  * Run one page, named relative to the document root, as a child process.
  *
+ * @param array $env extra environment variables for the page, so a case can
+ *                   hand it a value - a stored password hash, a cookie issued
+ *                   by an older version of the site - without writing it into
+ *                   the fixture.
  * @return array status, stdout, log
  */
-function mcm_cli(array $fixture, $script)
+function mcm_cli(array $fixture, $script, array $env = array())
 {
 	file_put_contents($fixture['log'], '');
 
 	$command = escapeshellarg(PHP_BINARY) . mcm_ini_args($fixture) . ' ' . escapeshellarg($fixture['public'] . '/' . $script);
 	$pipes   = array();
 	$output  = array('file', $fixture['root'] . '/stderr.log', 'a');
-	$process = proc_open($command, array(1 => array('pipe', 'w'), 2 => $output), $pipes, $fixture['public']);
+	// proc_open() replaces the whole environment rather than adding to it, so
+	// this process's own is merged in; without it the child loses PATH.
+	$environment = (count($env) > 0) ? $env + getenv() : null;
+	$process = proc_open($command, array(1 => array('pipe', 'w'), 2 => $output), $pipes, $fixture['public'], $environment);
 
 	if (!is_resource($process)) {
 		throw new RuntimeException('could not start ' . $command);

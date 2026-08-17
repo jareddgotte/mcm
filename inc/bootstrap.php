@@ -6,10 +6,11 @@
  * Every public entry point includes this file, first and exactly once. It is
  * the single place responsible for:
  *   1. installing the error, exception and shutdown handlers;
- *   2. loading configuration, on top of safe defaults;
- *   3. sending a plain-HTTP request on to the canonical HTTPS origin;
- *   4. starting the one and only session;
- *   5. handing out database connections, and deciding what a database failure
+ *   2. loading inc/security.php, the shared security primitives;
+ *   3. loading configuration, on top of safe defaults;
+ *   4. sending a plain-HTTP request on to the canonical HTTPS origin;
+ *   5. starting the one and only session;
+ *   6. handing out database connections, and deciding what a database failure
  *      does to the request.
  *
  * The file is inert on its own: nothing happens until an entry point includes
@@ -517,6 +518,14 @@ error_reporting(E_ALL & ~E_NOTICE);
 set_error_handler('mcm_error_handler');
 set_exception_handler('mcm_exception_handler');
 register_shutdown_function('mcm_shutdown_handler');
+
+/*
+ * The shared security primitives: random tokens, constant-time comparison,
+ * password hashing and session identifier renewal. Loaded after the handlers
+ * so that a missing file produces the generic response like any other failure,
+ * and before the configuration because nothing there depends on it.
+ */
+require_once dirname(__FILE__) . '/security.php';
 
 /*
  * ---------------------------------------------------------------------------

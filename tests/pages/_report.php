@@ -30,6 +30,17 @@ function mcm_probe_value($value)
 }
 
 /**
+ * Render a boolean fact for the report.
+ *
+ * @param bool $value
+ * @return string
+ */
+function mcm_probe_flag($value)
+{
+	return $value ? 'yes' : 'no';
+}
+
+/**
  * Print the report.
  */
 function mcm_probe_report()

@@ -3,11 +3,16 @@
 /**
  * The cases.
  *
- * Eight groups, matching what the shared bootstrap is responsible for:
+ * The first eight groups match what the shared bootstrap is responsible for:
  * configuration, a single session startup, the session cookie's attributes,
  * compatibility with sessions and remember-me cookies that already exist, error
  * handling, where a redirect is allowed to send a visitor, what a database
  * failure does to a request, and every entry point loading the bootstrap.
+ *
+ * The last three cover the shared security primitives in inc/security.php and
+ * the way inc/classes/Login.php and inc/classes/Registration.php use them:
+ * token generation, password compatibility, and renewing the session identifier
+ * whenever a visitor's authentication state changes.
  *
  * The machinery they are written against lives in tests/run.php.
  */
@@ -959,4 +964,352 @@ t_group('entry point inclusion', function () {
 		t_contains($case['problem'], implode(' | ', $problems), 'the check rejects ' . $description);
 	}
 	unlink($fixture['public'] . '/broken_entry_point.php');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 9. Tokens: how they are generated, compared, and carried in a cookie
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('secure tokens', function () {
+	// COOKIE_SECRET_KEY is spelled out rather than left to the fixture default,
+	// because this group builds a remember-me cookie by hand and has to hash it
+	// with the same key the fixture runs on.
+	$secret  = 'test-cookie-secret';
+	$fixture = mcm_fixture('tokens', array('config' => array('COOKIE_SECRET_KEY' => $secret)));
+	$result  = mcm_cli($fixture, 'probe_tokens.php');
+	$report  = mcm_report($result['stdout']);
+
+	t_same(0, $result['status'], 'the token page exits cleanly');
+	t_same('', $result['log'], 'generating tokens logs nothing');
+
+	// Lengths are in characters because that is what the columns holding them
+	// are measured in: 64 for users.user_rememberme_token, 40 for
+	// user_activation_hash and user_password_reset_hash. A token that outgrew
+	// its column would be cut short on the way into the database and never
+	// match again.
+	$lengths = array(
+		'token_a'       => 64,
+		'token_b'       => 64,
+		'token_c'       => 64,
+		'token_default' => 64,
+		'token_40'      => 40,
+		// An odd length is rounded up, so a token always comes from whole bytes.
+		'token_odd'     => 8,
+		'token_zero'    => 2,
+	);
+	foreach ($lengths as $name => $length) {
+		t_same($length, strlen($report[$name]), $name . ' is ' . $length . ' characters long');
+		t_matches('/^[0-9a-f]+$/', $report[$name], $name . ' is lowercase hexadecimal, so it fits the column it is stored in');
+	}
+	t_same('16', $report['bytes_length'], 'the byte source returns as many bytes as it was asked for');
+
+	$tokens = array($report['token_a'], $report['token_b'], $report['token_c']);
+	t_same(3, count(array_unique($tokens)), 'three tokens from one request are three different tokens');
+
+	// Different requests too, which is where a generator seeded once per process
+	// would give itself away.
+	$across = array();
+	for ($request = 0; $request < 4; $request++) {
+		$another  = mcm_report(mcm_cli($fixture, 'probe_tokens.php')['stdout']);
+		$across[] = $another['token_a'];
+	}
+	t_same(4, count(array_unique($across)), 'tokens from separate requests are all different');
+
+	// Constant-time comparison still has to be a correct comparison.
+	$equality = array(
+		'equals_same'      => 'yes',
+		'equals_different' => 'no',
+		'equals_prefix'    => 'no',
+		'equals_longer'    => 'no',
+		'equals_empty'     => 'yes',
+		'equals_missing'   => 'no',
+		'equals_token'     => 'yes',
+		'equals_flipped'   => 'no',
+	);
+	foreach ($equality as $name => $expected) {
+		t_same($expected, $report[$name], 'comparison: ' . substr($name, 7) . ' is ' . $expected);
+	}
+
+	// Pin PHP's pseudo-random generator and ask twice. A token built on
+	// mt_rand(), whatever is done to the value afterwards, comes out identical
+	// both times.
+	$first  = mcm_report(mcm_cli($fixture, 'probe_seeded_token.php')['stdout']);
+	$second = mcm_report(mcm_cli($fixture, 'probe_seeded_token.php')['stdout']);
+
+	t_same($first['legacy_token'], $second['legacy_token'], 'the fixed seed does pin the pseudo-random generator, so the next case means something');
+	t_ok($first['token'] !== $second['token'], 'a token does not follow from the seeded pseudo-random generator');
+	t_ok($first['token'] !== $first['legacy_token'], 'a token is not the value the previous implementation would have produced');
+
+	// A remember-me cookie exactly as the site issued them before this change:
+	// a token from the old sha256(mt_rand()) generator, hashed here rather than
+	// through the code being tested.
+	$legacy_token  = hash('sha256', '1804289383');
+	$legacy_cookie = '7:' . $legacy_token . ':' . hash('sha256', '7:' . $legacy_token . $secret);
+	$report        = mcm_report(mcm_cli($fixture, 'probe_rememberme.php', array('MCM_TEST_COOKIE' => $legacy_cookie))['stdout']);
+
+	t_same('yes', $report['valid'], 'a remember-me cookie issued before this change is still accepted');
+	t_same('7', $report['user_id'], 'the user id is read out of an existing cookie');
+	t_same($legacy_token, $report['token'], 'the token is read out of an existing cookie unchanged, so the stored one still matches it');
+
+	t_same('yes', $report['fresh_valid'], 'a cookie issued now is accepted');
+	t_same('yes', $report['fresh_roundtrip'], 'a cookie issued now reads back as what went into it');
+	t_matches('/^7:[0-9a-f]{64}:[0-9a-f]{64}$/', $report['fresh_cookie'], 'a cookie issued now has the same shape as the ones already in browsers');
+
+	$refusals = array(
+		'tampered_hash_valid'  => 'a cookie whose hash was altered is refused',
+		'tampered_token_valid' => 'a cookie whose token was altered is refused',
+		'malformed_valid'      => 'a cookie that is not in the expected format is refused',
+		'two_part_valid'       => 'a cookie missing its hash is refused',
+		'empty_token_valid'    => 'a correctly hashed cookie with no token is refused',
+	);
+	foreach ($refusals as $name => $description) {
+		t_same('no', $report[$name], $description);
+	}
+
+	// The generators that used to produce these values are gone from the files
+	// that issue them.
+	$login        = MCM_REPO_ROOT . '/inc/classes/Login.php';
+	$registration = MCM_REPO_ROOT . '/inc/classes/Registration.php';
+	$security     = MCM_REPO_ROOT . '/inc/security.php';
+
+	foreach (array($login, $registration, $security) as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		foreach (array('mt_rand', 'rand', 'uniqid') as $legacy) {
+			t_same(0, mcm_count_calls($file, $legacy), $name . ' does not call ' . $legacy . '()');
+		}
+	}
+	t_same(1, mcm_count_calls($security, 'random_bytes'), 'the generator is built on random_bytes()');
+
+	// Each kind of token comes from the shared generator, in the method that
+	// issues it.
+	t_same(1, mcm_method_calls($login, 'newRememberMeCookie', 'mcm_random_token'), 'the remember-me token comes from the shared generator');
+	t_same(1, mcm_method_calls($login, 'setPasswordResetDatabaseTokenAndSendMail', 'mcm_random_token'), 'the password reset token comes from the shared generator');
+	t_same(1, mcm_method_calls($registration, 'registerNewUser', 'mcm_random_token'), 'the activation token comes from the shared generator');
+
+	// And each check of a token against one from the request is constant-time.
+	t_same(1, mcm_method_calls($login, 'checkIfEmailVerificationCodeIsValid', 'mcm_hash_equals'), 'the password reset code is compared in constant time');
+	t_same(1, mcm_method_calls($login, 'loginWithCookieData', 'mcm_remember_me_cookie_parts'), 'the remember-me cookie is checked through the shared, constant-time reader');
+	t_same(1, mcm_count_calls($security, 'hash_equals'), 'the constant-time comparison is PHP\'s own where it exists');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 10. Passwords stored before this change, and rehashing them quietly
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('password compatibility', function () {
+	// Hashes the site itself wrote, kept here as literals: an account whose
+	// owner has not signed in since has exactly this in its row. Nothing about
+	// them may stop working.
+	$password = 'correct horse battery staple';
+	$cost_10  = '$2y$10$RLh/QrnMk2TZ/3G5qtm2uuLYc7WwgcNnhTppI0R.c8/b52LIFGCgK';
+	$cost_04  = '$2y$04$xjHsQvxzWpnzTPVko1JOn.ujh4KjOGjNXjsgwt0AeKyb7bottCsWe';
+
+	// The cost factor the shipped example configuration carries, as a string.
+	$fixture = mcm_fixture('passwords', array('config' => array('HASH_COST_FACTOR' => '10')));
+	$result  = mcm_cli($fixture, 'probe_passwords.php', array(
+		'MCM_TEST_PASSWORD' => $password,
+		'MCM_TEST_HASH'     => $cost_10,
+	));
+	$report = mcm_report($result['stdout']);
+
+	t_same(0, $result['status'], 'the password page exits cleanly');
+	t_same('', $result['log'], 'checking a password logs nothing');
+	t_same('{"cost":10}', $report['options'], 'the configured cost factor is what hashing uses');
+	t_same('yes', $report['verify'], 'a password stored before this change still signs its owner in');
+	t_same('no', $report['verify_wrong'], 'the wrong password is still refused');
+	t_same('no', $report['verify_empty_hash'], 'an account with no stored hash cannot be signed into');
+	t_same('no', $report['verify_garbage_hash'], 'an unreadable stored hash cannot be signed into');
+	t_same('no', $report['needs_rehash'], 'a hash that already matches the configured cost is left alone');
+	t_same('no', $report['needs_rehash_empty'], 'an empty stored hash is not something to recalculate');
+
+	// The same password, hashed with a weaker cost factor. This is what
+	// opportunistic rehashing exists for.
+	$report = mcm_report(mcm_cli($fixture, 'probe_passwords.php', array(
+		'MCM_TEST_PASSWORD' => $password,
+		'MCM_TEST_HASH'     => $cost_04,
+	))['stdout']);
+
+	t_same('yes', $report['verify'], 'a hash written with a weaker cost factor still signs its owner in');
+	t_same('yes', $report['needs_rehash'], 'a weaker hash is picked out to be recalculated');
+	t_same('yes', $report['stored_still_verifies'], 'the stored hash keeps working while the new one is being written');
+	t_same('yes', $report['recalculated_differs'], 'the recalculated hash is a new one');
+	t_same('yes', $report['recalculated_verify'], 'the recalculated hash accepts the same password, so nobody is asked to reset anything');
+	t_same('no', $report['recalculated_wrong'], 'the recalculated hash still refuses the wrong password');
+	t_same('no', $report['recalculated_needs_rehash'], 'the recalculated hash settles, so a login does not rewrite the row every time');
+	t_matches('/^\$2y\$10\$/', $report['recalculated'], 'the recalculated hash carries the configured cost factor');
+
+	// Raising the cost factor is the other way an existing hash becomes one to
+	// recalculate.
+	$fixture = mcm_fixture('passwords-costlier', array('config' => array('HASH_COST_FACTOR' => '12')));
+	$report  = mcm_report(mcm_cli($fixture, 'probe_passwords.php', array(
+		'MCM_TEST_PASSWORD' => $password,
+		'MCM_TEST_HASH'     => $cost_10,
+	))['stdout']);
+
+	t_same('{"cost":12}', $report['options'], 'a raised cost factor reaches the hashing');
+	t_same('yes', $report['verify'], 'raising the cost factor does not stop existing passwords verifying');
+	t_same('yes', $report['needs_rehash'], 'raising the cost factor marks existing hashes for recalculation');
+	t_matches('/^\$2y\$12\$/', $report['recalculated'], 'the recalculated hash uses the raised cost factor');
+	t_same('yes', $report['recalculated_verify'], 'the recalculated hash accepts the same password');
+
+	// A configuration that never defined a cost factor, and ones that define an
+	// unusable value: all fall back to PHP's own default rather than failing.
+	$unusable = array(
+		'no cost factor at all' => null,
+		'a cost factor that is not a number' => 'ten',
+		'a cost factor outside the accepted range' => '99',
+	);
+	$index = 0;
+	foreach ($unusable as $description => $value) {
+		$fixture = mcm_fixture('passwords-default-' . $index++, array('config' => array('HASH_COST_FACTOR' => $value)));
+		$result  = mcm_cli($fixture, 'probe_passwords.php', array(
+			'MCM_TEST_PASSWORD' => $password,
+			'MCM_TEST_HASH'     => $cost_10,
+		));
+		$report = mcm_report($result['stdout']);
+
+		t_same('[]', $report['options'], $description . ': hashing falls back to PHP\'s own default');
+		t_same('yes', $report['verify'], $description . ': existing passwords still verify');
+		t_same('yes', $report['recalculated_verify'], $description . ': a newly calculated hash accepts the password');
+		t_same('', $result['log'], $description . ': nothing is logged');
+	}
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 11. Renewing the session identifier when the visitor's state changes
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('session identifier renewal', function () {
+	$fixture  = mcm_fixture('regenerate');
+	$existing = 'aaaabbbbccccddddeeeeffff00001111';
+	$for_late = '11110000ffffeeeeddddccccbbbbaaaa';
+
+	// Two visitors who were signed in before any of this shipped.
+	mcm_seed_session($fixture, $existing, array('user_name' => 'already-signed-in', 'user_id' => 7));
+	mcm_seed_session($fixture, $for_late, array('user_name' => 'already-signed-in', 'user_id' => 7));
+
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe_regenerate.php', array('Cookie: PHPSESSID=' . $existing));
+		$report   = mcm_report($response['body']);
+		$cookies  = implode(' ', mcm_header_values($response, 'Set-Cookie'));
+
+		t_same(200, $response['status'], 'a page that authenticates a visitor renders');
+		t_same($existing, $report['session_id_before'], 'the request started on the identifier the browser sent');
+		t_same('yes', $report['regenerated'], 'the transition renews the session identifier');
+		t_ok($report['session_id'] !== $existing, 'the identifier the session ends on is a different one');
+		t_matches('/^[A-Za-z0-9,-]+$/', $report['session_id'], 'the session still has an identifier afterwards');
+		t_contains('transitioning-user', $report['session_json'], 'the session data survives the renewal, so the visitor stays signed in');
+		t_contains('PHPSESSID=' . $report['session_id'], $cookies, 'the browser is told to keep the new identifier');
+		t_lacks($existing, $cookies, 'the identifier the visitor arrived with is not handed back');
+		t_same('', $response['log'], 'renewing the identifier logs nothing');
+
+		// The point of the renewal: the identifier an attacker could have
+		// planted beforehand stops working, rather than becoming a signed-in
+		// one.
+		$files = mcm_session_files($fixture);
+		t_ok(in_array($report['session_id'], $files, true), 'the renewed session is the one held on the server');
+		t_ok(!in_array($existing, $files, true), 'the session the old identifier pointed at is gone');
+
+		$response = mcm_http($server, '/probe.php', array('Cookie: PHPSESSID=' . $existing));
+		$after    = mcm_report($response['body']);
+		t_ok($after['session_id'] !== $existing, 'the old identifier is not adopted again afterwards');
+		t_same('[]', $after['session_json'], 'the old identifier carries no signed-in data any more');
+
+		// A visitor who had no session at all when the transition happened.
+		$response = mcm_http($server, '/probe_regenerate.php');
+		$report   = mcm_report($response['body']);
+		$cookies  = implode(' ', mcm_header_values($response, 'Set-Cookie'));
+
+		t_same('yes', $report['regenerated'], 'a visitor with no session yet also gets a renewed identifier');
+		t_ok($report['session_id_before'] !== '' && $report['session_id'] !== $report['session_id_before'], 'the identifier the request started with is not the one it ends with');
+		t_contains('PHPSESSID=' . $report['session_id'], $cookies, 'the browser is told to keep the final identifier');
+		t_lacks($report['session_id_before'], $cookies, 'the identifier the request started with is not left in the browser');
+
+		// Output has already started: renewing is impossible, and the page has
+		// to say so to the log and carry on regardless.
+		$response = mcm_http($server, '/probe_regenerate_late.php', array('Cookie: PHPSESSID=' . $for_late));
+		$report   = mcm_report($response['body']);
+
+		t_same(200, $response['status'], 'a transition after output started still returns the page');
+		t_same('no', $report['regenerated'], 'a renewal that could not happen is not reported as having happened');
+		t_same($for_late, $report['session_id'], 'the identifier is left as it was when it could not be renewed');
+		t_contains('request_completed=yes', $response['body'], 'the request the visitor made still finishes');
+		t_contains('output had already started', $response['log'], 'the reason is in the log');
+		t_lacks('output had already started', $response['body'], 'the reason stays out of the response');
+	} catch (Exception $exception) {
+		t_ok(false, 'the session renewal cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// The other way it can fail: no session is open at all.
+	$result = mcm_cli($fixture, 'probe_regenerate_closed.php');
+	$report = mcm_report($result['stdout']);
+	t_same(0, $result['status'], 'a renewal with no session open does not fail the request');
+	t_same('no', $report['regenerated'], 'a renewal with no session open reports that it did not happen');
+	t_contains('request_completed=yes', $result['stdout'], 'the page still finishes');
+	t_contains('no session is active', $result['log'], 'the reason is in the log');
+	t_lacks('no session is active', $result['stdout'], 'the reason stays out of the response');
+
+	// Every authentication-sensitive transition renews the identifier, and the
+	// fact is read from that transition's own code rather than from the file as
+	// a whole.
+	$login       = MCM_REPO_ROOT . '/inc/classes/Login.php';
+	$transitions = array(
+		'loginWithPostData'   => 'a successful login',
+		'loginWithCookieData' => 'a login from a remember-me cookie',
+		'editUserPassword'    => 'a password change',
+		'editNewPassword'     => 'a password reset',
+	);
+	foreach ($transitions as $method => $description) {
+		t_same(1, mcm_method_calls($login, $method, 'mcm_session_regenerate_id'), $description . ' renews the session identifier');
+	}
+	t_same(count($transitions), mcm_count_calls($login, 'mcm_session_regenerate_id'), 'those transitions are the only places that renew it');
+
+	// The rehash sits in the login path too, and only there.
+	t_same(1, mcm_method_calls($login, 'loginWithPostData', 'mcm_password_needs_rehash'), 'a successful login is where a stored hash is reconsidered');
+	t_same(1, mcm_method_calls($login, 'loginWithPostData', 'mcm_password_verify'), 'a login verifies the password through the shared helper');
+	foreach (array($login, MCM_REPO_ROOT . '/inc/classes/Registration.php') as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		t_same(0, mcm_count_calls($file, 'password_hash'), $name . ' hashes passwords through the shared helper only');
+		t_same(0, mcm_count_calls($file, 'password_verify'), $name . ' verifies passwords through the shared helper only');
+		t_same(0, mcm_count_calls($file, 'password_needs_rehash'), $name . ' asks about rehashing through the shared helper only');
+	}
+
+	// The per-method check has to have teeth: a call in a neighbouring method
+	// must not count. Nothing here touches the checkout.
+	$fixture = mcm_fixture('method-scope');
+	$path    = $fixture['public'] . '/scoped_example.php';
+	$source  = <<<'PHP'
+<?php
+
+class Example
+{
+	public function withCall($argument = array())
+	{
+		if (true) {
+			mcm_session_regenerate_id();
+		}
+	}
+
+	public function withoutCall($argument = '')
+	{
+		// mcm_session_regenerate_id() is only mentioned here.
+		$note = "a string that interpolates {$argument} and names mcm_session_regenerate_id";
+		return $note;
+	}
+}
+PHP;
+	file_put_contents($path, $source);
+
+	t_same(1, mcm_method_calls($path, 'withCall', 'mcm_session_regenerate_id'), 'the per-method check finds the call in the method it names');
+	t_same(0, mcm_method_calls($path, 'withoutCall', 'mcm_session_regenerate_id'), 'the per-method check does not see a neighbouring method\'s call');
+	t_same(0, mcm_method_calls($path, 'noSuchMethod', 'mcm_session_regenerate_id'), 'the per-method check reports nothing for a method that is not there');
+	unlink($path);
 });
