@@ -530,6 +530,21 @@ function mcm_http_post(array $server, $path, array $fields = array(), array $hea
 	return mcm_http($server, $path, $headers, 'POST', http_build_query($fields));
 }
 
+/**
+ * Every response header as one "name: value" block.
+ *
+ * The body is not the only thing a client reads, so a case that asserts private
+ * detail did not reach the client has to look here too.
+ */
+function mcm_header_text(array $response)
+{
+	$text = '';
+	foreach ($response['headers'] as $header) {
+		$text .= $header[0] . ': ' . $header[1] . "\n";
+	}
+	return $text;
+}
+
 /** All values of one response header, in the order they arrived. */
 function mcm_header_values(array $response, $name)
 {

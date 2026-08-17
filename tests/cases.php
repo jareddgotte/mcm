@@ -1389,7 +1389,20 @@ t_group('guard helpers', function () {
 	t_same('list 11', $report['log_detail_plain'], 'ordinary detail is passed through');
 	t_same('first?second??third', $report['log_detail_control'], 'a value cannot break the log into more lines');
 	t_same('103', $report['log_detail_length'], 'a long value is truncated');
-	t_same('array', $report['log_detail_non_string'], 'a value that is not a string is reduced to its type');
+
+	// The other half of the same rule: a rendering that keeps only the type is
+	// not a diagnostic. A value that is not a string still has to arrive in the
+	// log as itself, which is why each of these asserts the value and not just
+	// the word in front of it. The application may not call var_export() and
+	// friends at all (see the debug-output check), so this is the rendering that
+	// has to carry them.
+	t_same('boolean true', $report['log_detail_true'], 'a true value reaches the log as its value');
+	t_same('boolean false', $report['log_detail_false'], 'a false value reaches the log as its value');
+	t_same('null', $report['log_detail_null'], 'a null value reaches the log as its value');
+	t_same('integer 11', $report['log_detail_int'], 'an integer reaches the log as its value');
+	t_same('double 1.5', $report['log_detail_float'], 'a float reaches the log as its value');
+	// Only what cannot be written on one line falls back to the type alone.
+	t_same('array', $report['log_detail_non_string'], 'a value with no one-line rendering is reduced to its type');
 
 	// The refusal bodies: fixed strings, chosen so that two different reasons
 	// sharing a status are indistinguishable from outside.
@@ -1654,6 +1667,22 @@ t_group('guard rejections', function () {
 				t_lacks('reached', $response['body'], 'require_list_owner stops the page for ' . $description);
 				t_contains($case['logged'], $response['log'], 'the reason is logged for ' . $description);
 			}
+
+			// Both halves of what a refusal is for, on one request: the value
+			// that caused it is in the log, where somebody diagnosing this can
+			// read it, and it is not in the response, where the client could.
+			// A log that says only "an identifier was not a positive integer"
+			// cannot be used to find out what was sent, so the value itself is
+			// what is asserted here.
+			$response = mcm_http_post($server, '/guard_require_list_owner.php', array('movie_list_id' => $seed), array('Cookie: PHPSESSID=' . $signed_in));
+
+			t_same(403, $response['status'], 'a refused identifier gets the ordinary refusal');
+			t_contains($seed, $response['log'], 'the refused identifier itself reaches the log');
+			t_contains('not a positive integer', $response['log'], 'the log says why it was refused');
+			t_same($forbidden, $response['body'], 'the response is the same fixed body as every other refusal');
+			t_lacks($seed, $response['body'], 'the refused identifier never reaches the client');
+			// The body is not the only thing the client reads.
+			t_lacks($seed, mcm_header_text($response), 'the refused identifier never reaches the response headers');
 		}
 
 		/* The refusal itself: detail goes to the log, never to the client. */
@@ -1670,6 +1699,7 @@ t_group('guard rejections', function () {
 			t_same($status === 599 ? 400 : $status, $response['status'], 'a refusal with status ' . $status);
 			t_same($body, $response['body'], 'the body of a refusal with status ' . $status);
 			t_lacks($seed, $response['body'], 'the private detail never reaches the client for status ' . $status);
+			t_lacks($seed, mcm_header_text($response), 'the private detail never reaches the headers for status ' . $status);
 			t_contains($seed, $response['log'], 'the private detail is logged for status ' . $status);
 			t_lacks('never reached', $response['body'], 'nothing after the refusal runs for status ' . $status);
 		}

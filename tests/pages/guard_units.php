@@ -52,10 +52,18 @@ $report['token_floor']  = strlen(mcm_random_token(4));
 $report['method']  = mcm_request_method();
 $report['is_post'] = mcm_guard_bool(mcm_request_is_post());
 
-/* Client input on its way to a log line. */
+/* Client input on its way to a log line. A log line that says only what type a
+ * value was is not a diagnostic, so each rendering below has to carry the value
+ * itself - without any of the dumping functions the application is forbidden to
+ * call. */
 $report['log_detail_plain']     = mcm_log_detail('list 11');
 $report['log_detail_control']   = mcm_log_detail("first\nsecond\r\tthird");
 $report['log_detail_length']    = strlen(mcm_log_detail(str_repeat('x', 500)));
+$report['log_detail_true']      = mcm_log_detail(true);
+$report['log_detail_false']     = mcm_log_detail(false);
+$report['log_detail_null']      = mcm_log_detail(null);
+$report['log_detail_int']       = mcm_log_detail(11);
+$report['log_detail_float']     = mcm_log_detail(1.5);
 $report['log_detail_non_string'] = mcm_log_detail(array(1, 2));
 
 /* Refusal bodies. */
