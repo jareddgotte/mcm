@@ -50,6 +50,28 @@ the application. Setup is documented in `README.md`.
   a real outage.
 - When changing the harness, re-run the mutation sweep rather than trusting a
   green run: an assertion that cannot fail still passes.
+- One group is optional and is the only part that wants more than a PHP CLI:
+  `tests/database.php` runs a private, throw-away database server when
+  `MCM_TEST_MYSQLD` or `PATH` offers a `mariadbd`/`mysqld`, and otherwise prints
+  a loud notice naming the coverage that was skipped. Both paths have to keep
+  passing. It needs no production change: `DB_HOST` reaches the DSN verbatim, so
+  `127.0.0.1;port=<port>` is the whole seam. See `README.md` for how to enable it.
+- That group exists for the three regressions the rest of the suite is blind to,
+  listed in `mcm_db_uncovered()`: a call present in a method but never reached, a
+  value written to a column too narrow for it, and a `WHERE` clause that stops
+  restricting. All three were injected, shown failing and reverted; if you weaken
+  the group, do that again rather than assume.
+- Server lifecycle is the sharp edge, because its failure mode is a hang rather
+  than a failure. `proc_close()` waits for the child, so calling it on a server
+  that ignored SIGTERM never returns; `mcm_db_stop_server()` therefore signals,
+  waits a bounded time, escalates to SIGKILL and only then reaps, is idempotent,
+  and runs from a shutdown function and a signal handler as well as inline. The
+  `exec` prefix matters here for the same reason it does for the built-in server,
+  with worse consequences: an orphan holds both the port and the data directory.
+- The tracked schema is MyISAM throughout, so nothing is transactional and cases
+  re-seed instead of rolling back, and `users.user_registration_datetime`
+  defaults to a zero date that a `NO_ZERO_DATE` server refuses - the dump's own
+  `SET SQL_MODE` line is what makes it loadable. `README.md` has the detail.
 
 ## Request lifecycle
 

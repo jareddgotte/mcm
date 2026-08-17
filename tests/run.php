@@ -11,6 +11,11 @@
  * process or through PHP's built-in server, so a run never touches the
  * checkout. The machinery lives here; the cases are in tests/cases.php and the
  * static checks in tests/entrypoints.php.
+ *
+ * One group is the exception, and only ever by addition: tests/database.php
+ * runs a private, throw-away database server when a developer has a server
+ * binary to run, and prints a loud skip naming the uncovered regressions when
+ * they do not. The suite passes either way.
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -440,9 +445,12 @@ function mcm_server_stop(array $server)
  *
  * @param string $method GET unless a case needs the request method itself to
  *                       matter, as the method-preserving redirect does
+ * @param string $body   request body, for the form submissions the login and
+ *                       password-reset paths are driven by; a form content type
+ *                       is added unless the caller names one
  * @return array status, headers, body, log
  */
-function mcm_http(array $server, $path, array $headers = array(), $method = 'GET')
+function mcm_http(array $server, $path, array $headers = array(), $method = 'GET', $body = '')
 {
 	file_put_contents($server['fixture']['log'], '');
 
@@ -457,20 +465,30 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 		'Connection: close',
 	);
 	if (strtoupper($method) !== 'GET' && strtoupper($method) !== 'HEAD') {
-		// A request with a method that may carry a body has to say it carries
-		// none, or the server waits for one.
-		$lines[] = 'Content-Length: 0';
+		// A request with a method that may carry a body has to say how long the
+		// body is, even when it is empty, or the server waits for one.
+		$lines[] = 'Content-Length: ' . strlen($body);
+		if ($body !== '') {
+			$lines[] = 'Content-Type: application/x-www-form-urlencoded';
+		}
 	}
 	foreach ($headers as $header) {
 		if (stripos($header, 'host:') === 0) {
 			$lines[0] = $header;
+		} elseif (stripos($header, 'content-type:') === 0) {
+			// A caller that names a content type replaces the default one
+			// rather than sending a second, which no server would agree on.
+			$lines = mcm_replace_header($lines, 'Content-Type', $header);
 		} else {
 			$lines[] = $header;
 		}
 	}
 
+	// A body only goes out on a method that announced its length above; a GET
+	// with one would be a request no server agrees on how to read.
+	$payload = (strtoupper($method) === 'GET' || strtoupper($method) === 'HEAD') ? '' : $body;
 	$request = strtoupper($method) . ' ' . $path . " HTTP/1.1\r\n" . implode("\r\n", $lines) . "\r\n";
-	fwrite($socket, $request . "\r\n");
+	fwrite($socket, $request . "\r\n" . $payload);
 	$raw = '';
 	while (!feof($socket)) {
 		$chunk = fread($socket, 8192);
@@ -506,6 +524,30 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 	);
 }
 
+/** Replace a request header line of that name, or append it when there is none. */
+function mcm_replace_header(array $lines, $name, $replacement)
+{
+	foreach ($lines as $index => $line) {
+		if (stripos($line, $name . ':') === 0) {
+			$lines[$index] = $replacement;
+			return $lines;
+		}
+	}
+	$lines[] = $replacement;
+
+	return $lines;
+}
+
+/** Build a form-encoded request body from field names and values. */
+function mcm_form_body(array $fields)
+{
+	$parts = array();
+	foreach ($fields as $name => $value) {
+		$parts[] = urlencode($name) . '=' . urlencode($value);
+	}
+	return implode('&', $parts);
+}
+
 /** All values of one response header, in the order they arrived. */
 function mcm_header_values(array $response, $name)
 {
@@ -516,6 +558,26 @@ function mcm_header_values(array $response, $name)
 		}
 	}
 	return $values;
+}
+
+/**
+ * The value a response sets one cookie to, or an empty string.
+ *
+ * The last Set-Cookie for that name wins, which is what a browser would do.
+ */
+function mcm_cookie_value(array $response, $name)
+{
+	$value = '';
+	foreach (mcm_header_values($response, 'Set-Cookie') as $header) {
+		if (strpos($header, $name . '=') === 0) {
+			$value = substr($header, strlen($name) + 1);
+			$end   = strpos($value, ';');
+			if ($end !== false) {
+				$value = substr($value, 0, $end);
+			}
+		}
+	}
+	return $value;
 }
 
 /** Parse a probe page's "key=value" report into an array. */
@@ -540,6 +602,7 @@ function mcm_generic_message()
 /* Run ----------------------------------------------------------------------- */
 
 require_once MCM_TESTS_DIR . '/entrypoints.php';
+require_once MCM_TESTS_DIR . '/database.php';
 require_once MCM_TESTS_DIR . '/cases.php';
 
 $mcm_filter = '';
@@ -579,6 +642,10 @@ echo sprintf(
 	microtime(true) - $GLOBALS['mcm_state']['started']
 );
 
+// Before the work directory goes: the optional database server keeps its data
+// directory under it, and removing that from under a running server would
+// leave both the process and the port behind.
+mcm_db_stop_server();
 mcm_rmtree(mcm_work_dir());
 
 exit(count($mcm_failures) === 0 ? 0 : 1);

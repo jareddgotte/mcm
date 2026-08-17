@@ -9,12 +9,18 @@
  * handling, where a redirect is allowed to send a visitor, what a database
  * failure does to a request, and every entry point loading the bootstrap.
  *
- * The last three cover the shared security primitives in inc/security.php and
+ * The next three cover the shared security primitives in inc/security.php and
  * the way inc/classes/Login.php and inc/classes/Registration.php use them:
  * token generation, password compatibility, and renewing the session identifier
  * whenever a visitor's authentication state changes.
  *
- * The machinery they are written against lives in tests/run.php.
+ * The last group is optional and is the only one that needs anything beyond a
+ * PHP CLI: given a database server binary it runs a private, throw-away server
+ * and drives the authentication paths against the tracked schema. Without one
+ * it skips loudly and says what that leaves uncovered.
+ *
+ * The machinery they are written against lives in tests/run.php, and the
+ * database group's own in tests/database.php.
  */
 
 /*
@@ -1312,4 +1318,287 @@ PHP;
 	t_same(0, mcm_method_calls($path, 'withoutCall', 'mcm_session_regenerate_id'), 'the per-method check does not see a neighbouring method\'s call');
 	t_same(0, mcm_method_calls($path, 'noSuchMethod', 'mcm_session_regenerate_id'), 'the per-method check reports nothing for a method that is not there');
 	unlink($path);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 12. The optional real-server database group
+ * ---------------------------------------------------------------------------
+ *
+ * Everything above needs a PHP CLI and nothing else, and still does. This group
+ * is the one exception, and it is optional: with no database server binary on
+ * the machine it skips loudly and names what the run therefore did not cover.
+ *
+ * It exists for three classes of regression that are structurally invisible to
+ * the rest of the suite, listed in mcm_db_uncovered() and asserted here:
+ *
+ *   1. a call that is present in a method but never reached. The per-method
+ *      static check counts the call; only running the transition shows whether
+ *      the path that renews the session identifier is the path a login takes.
+ *   2. a value stored in a column too narrow to hold it. The width belongs to
+ *      the tracked schema, so only the tracked schema can enforce it, and the
+ *      symptom - a remember-me cookie that stops working - is a request later.
+ *   3. a query whose WHERE clause stops restricting. The SQL still parses and
+ *      still runs; what changes is which rows come back or get written.
+ *
+ * The machinery is in tests/database.php. No application file knows this group
+ * exists: the server's address, database and credentials travel in DB_HOST,
+ * DB_NAME, DB_USER and DB_PASS like any other configuration.
+ */
+
+t_group('real database', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		$reason = mcm_db_skip_reason();
+		t_skip('the real-database group', $reason);
+		mcm_db_print_skip($reason);
+		return;
+	}
+
+	echo '  note  ' . $server['version'] . ', private instance on port ' . $server['port'] . "\n";
+
+	// A server that is up but could not be given the tracked schema is a
+	// failure, not a skip: nothing about it depends on the developer's machine.
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded into the server')) {
+		return;
+	}
+
+	// Passwords and tokens are generated rather than written down, so no
+	// committed file holds anything shaped like a credential.
+	$password     = 'p' . bin2hex(random_bytes(6));
+	$new_password = 'n' . bin2hex(random_bytes(6));
+	$activation   = bin2hex(random_bytes(20));
+	$reset        = bin2hex(random_bytes(20));
+	$wrong_token  = bin2hex(random_bytes(20));
+	// Spelled into the fixture rather than left to its default, because this
+	// group builds a remember-me cookie by hand and has to hash it with the key
+	// the fixture runs on.
+	$secret = 'k' . bin2hex(random_bytes(8));
+
+	$fixture = mcm_db_fixture('real-database', $server, array('COOKIE_SECRET_KEY' => $secret));
+	$pdo     = mcm_db_reset($server);
+
+	// The schema really is the tracked one, loaded as it stands.
+	$engines = array();
+	foreach ($pdo->query('SHOW TABLE STATUS') as $status) {
+		$engines[$status['Name']] = $status['Engine'];
+	}
+	t_ok(isset($engines['users']), 'the tracked schema created the users table', implode(', ', array_keys($engines)));
+	t_same('MyISAM', isset($engines['users']) ? $engines['users'] : '', 'the users table is on the engine the tracked schema names');
+
+	$columns = array();
+	foreach ($pdo->query('SHOW COLUMNS FROM users') as $column) {
+		$columns[$column['Field']] = $column['Type'];
+	}
+	t_contains('64', isset($columns['user_rememberme_token']) ? $columns['user_rememberme_token'] : '', 'the remember-me column is the width the token is generated to');
+
+	$signed_in = mcm_db_seed_user($pdo, 'loginuser', $password);
+	$pending   = mcm_db_seed_user($pdo, 'pendinguser', $password, array(
+		'user_active'          => 0,
+		'user_activation_hash' => $activation,
+	));
+	mcm_db_seed_user($pdo, 'resetuser', $password, array(
+		'user_password_reset_hash'      => $reset,
+		'user_password_reset_timestamp' => time(),
+	));
+
+	$server_handle = mcm_server_start($fixture);
+	try {
+		/* 1. Activation: a query that has to keep restricting ---------------- */
+
+		// The wrong code first. Nothing about this can be seen without a server:
+		// the WHERE clause is what refuses it, and the refusal is a row that did
+		// not change.
+		$response = mcm_http($server_handle, '/register.php?id=' . $pending . '&verification_code=' . $wrong_token);
+		$row      = mcm_db_user_row($pdo, 'pendinguser');
+
+		t_same(200, $response['status'], 'a wrong verification code still renders the page');
+		t_contains('no such id/verification code', $response['body'], 'a wrong verification code is refused');
+		t_same('0', (string) $row['user_active'], 'a wrong verification code leaves the account inactive');
+		t_same($activation, $row['user_activation_hash'], 'a wrong verification code leaves the stored code in place');
+
+		// An id that exists with a code that belongs to nobody is the same
+		// answer; so is the right code against the wrong id.
+		$response = mcm_http($server_handle, '/register.php?id=' . $signed_in . '&verification_code=' . $activation);
+		t_contains('no such id/verification code', $response['body'], "another account's verification code is refused");
+		t_same('0', (string) mcm_db_user_row($pdo, 'pendinguser')['user_active'], 'the pending account is still inactive');
+
+		$response = mcm_http($server_handle, '/register.php?id=' . $pending . '&verification_code=' . $activation);
+		$row      = mcm_db_user_row($pdo, 'pendinguser');
+
+		t_contains('Activation was successful', $response['body'], 'the right verification code activates the account');
+		t_same('1', (string) $row['user_active'], 'the account is active afterwards');
+		t_same(null, $row['user_activation_hash'], 'the code is cleared, so it cannot be used twice');
+		t_same('', $response['log'], 'activating an account logs nothing');
+
+		/* 2. Login: a transition that has to renew the session identifier ---- */
+
+		$existing = 'aaaabbbbccccdddd1111222233334444';
+		mcm_seed_session($fixture, $existing, array('probe' => 'signed out'));
+
+		$form = mcm_form_body(array(
+			'login'           => '1',
+			'user_name'       => 'loginuser',
+			'user_password'   => $password,
+			'user_rememberme' => '1',
+		));
+		$response = mcm_http($server_handle, '/index.php', array('Cookie: PHPSESSID=' . $existing), 'POST', $form);
+		$session  = mcm_cookie_value($response, 'PHPSESSID');
+		$cookie   = mcm_cookie_value($response, 'rememberme');
+
+		t_same(301, $response['status'], 'a login posts and is redirected, as it always was');
+		t_same('', $response['log'], 'a successful login logs nothing');
+
+		// Class 1. The static check counts the call inside loginWithPostData();
+		// this is the only thing that says the login ran it.
+		t_ok($session !== '', 'a login hands back a session cookie', 'headers: ' . implode(' | ', mcm_header_values($response, 'Set-Cookie')));
+		t_ok($session !== $existing, 'a login does not leave the visitor on the identifier they arrived with');
+
+		$files = mcm_session_files($fixture);
+		t_ok(in_array($session, $files, true), 'the signed-in session is the one held on the server');
+		t_ok(!in_array($existing, $files, true), 'the identifier the browser arrived with no longer names a session');
+		t_contains('user_logged_in', file_get_contents($fixture['sessions'] . '/sess_' . $session), 'the renewed session is the signed-in one');
+
+		// Class 2. The token in the browser and the token in the column have to
+		// be the same string, and the column decides how long that can be.
+		// setcookie() percent-encodes the value, so the cookie travels encoded
+		// and is decoded again on the way in. The harness hands it back exactly
+		// as it arrived, and only reads it apart here.
+		$row   = mcm_db_user_row($pdo, 'loginuser');
+		$parts = explode(':', urldecode($cookie));
+
+		t_same(3, count($parts), 'the remember-me cookie has its three parts', $cookie);
+		t_same(64, strlen($row['user_rememberme_token']), 'the stored remember-me token is the width of its column');
+		t_same($row['user_rememberme_token'], isset($parts[1]) ? $parts[1] : '', 'the token in the browser is the token in the database');
+		t_same((string) $signed_in, isset($parts[0]) ? $parts[0] : '', 'the cookie names the user it was issued to');
+
+		// The stored hash was written at the cheapest cost bcrypt accepts, so a
+		// login is the moment it gets replaced - and the replacement has to be
+		// in the column, not just in a variable.
+		t_ok(password_verify($password, $row['user_password_hash']), 'the stored hash still verifies the password after the login');
+		$info = password_get_info($row['user_password_hash']);
+		t_same(10, isset($info['options']['cost']) ? $info['options']['cost'] : 0, 'the stored hash was recalculated at the configured cost');
+
+		/* 3. Remember-me: the cookie has to work on the next request --------- */
+
+		$response = mcm_http($server_handle, '/probe_login_state.php', array('Cookie: rememberme=' . $cookie));
+		$report   = mcm_report($response['body']);
+		$rotated  = mcm_cookie_value($response, 'rememberme');
+
+		t_same('yes', $report['logged_in'], 'the remember-me cookie signs the visitor back in', $response['body']);
+		t_same('loginuser', $report['user_name'], 'it signs in the account it was issued to');
+		t_same('', $report['errors'], 'a valid remember-me cookie reports no error');
+		t_ok($report['session_id'] !== $report['session_id_before'], 'a cookie login renews the session identifier too');
+
+		// The token is used once: the database holds a new one and the cookie
+		// the browser arrived with stops working.
+		$row = mcm_db_user_row($pdo, 'loginuser');
+		t_ok($rotated !== '' && $rotated !== $cookie, 'a cookie login issues a fresh cookie');
+		$rotated_parts = explode(':', urldecode($rotated));
+		t_same($row['user_rememberme_token'], isset($rotated_parts[1]) ? $rotated_parts[1] : '', 'the fresh cookie matches the token now stored');
+		t_ok($row['user_rememberme_token'] !== $parts[1], 'the token that was just used is no longer the stored one');
+
+		$response = mcm_http($server_handle, '/probe_login_state.php', array('Cookie: rememberme=' . $cookie));
+		$report   = mcm_report($response['body']);
+		t_same('no', $report['logged_in'], 'the used remember-me cookie does not sign anyone in a second time');
+		t_contains('Invalid cookie', $report['errors'], 'the used cookie is reported as invalid');
+
+		// A cookie whose hash is right - it is built here with the same secret
+		// the fixture runs on - but whose token the database never held. Only
+		// the query can refuse this one; every check before it passes.
+		$never_issued = bin2hex(random_bytes(32));
+		$forged       = $signed_in . ':' . $never_issued . ':'
+			. hash('sha256', $signed_in . ':' . $never_issued . $secret);
+
+		$response = mcm_http($server_handle, '/probe_login_state.php', array('Cookie: rememberme=' . $forged));
+		$report   = mcm_report($response['body']);
+		t_same('no', $report['logged_in'], 'a correctly signed cookie holding a token the database never had signs nobody in');
+		t_contains('Invalid cookie', $report['errors'], 'the unknown token is reported as an invalid cookie');
+
+		/* 4. Signing in with the wrong things -------------------------------- */
+
+		$attempts = array(
+			'a wrong password'    => array('user_name' => 'loginuser', 'user_password' => $password . 'x', 'expect' => 'Wrong password'),
+			'an unknown account'  => array('user_name' => 'nosuchuser', 'user_password' => $password, 'expect' => 'This user does not exist'),
+		);
+		foreach ($attempts as $description => $attempt) {
+			$form = mcm_form_body(array(
+				'login'           => '1',
+				'user_name'       => $attempt['user_name'],
+				'user_password'   => $attempt['user_password'],
+				'user_rememberme' => '1',
+			));
+			$response = mcm_http($server_handle, '/probe_login_state.php', array(), 'POST', $form);
+			$report   = mcm_report($response['body']);
+
+			t_same('no', $report['logged_in'], $description . ' does not sign anyone in');
+			t_contains($attempt['expect'], $report['errors'], $description . ' is reported as such');
+			t_same('', mcm_cookie_value($response, 'rememberme'), $description . ' issues no remember-me cookie');
+		}
+
+		// An account that exists and whose password is right, but which was
+		// never activated. Only the stored user_active column says so.
+		mcm_db_seed_user($pdo, 'inactiveuser', $password, array('user_active' => 0));
+		$form = mcm_form_body(array(
+			'login'         => '1',
+			'user_name'     => 'inactiveuser',
+			'user_password' => $password,
+		));
+		$response = mcm_http($server_handle, '/probe_login_state.php', array(), 'POST', $form);
+		$report   = mcm_report($response['body']);
+
+		t_same('no', $report['logged_in'], 'an unactivated account does not sign in');
+		t_contains('not activated yet', $report['errors'], 'an unactivated account is told why');
+
+		/* 5. Password reset: the other query that has to keep restricting ---- */
+
+		$form = mcm_form_body(array(
+			'submit_new_password'      => '1',
+			'user_name'                => 'resetuser',
+			'user_password_reset_hash' => $wrong_token,
+			'user_password_new'        => $new_password,
+			'user_password_repeat'     => $new_password,
+		));
+		$response = mcm_http($server_handle, '/password_reset.php', array(), 'POST', $form);
+		$row      = mcm_db_user_row($pdo, 'resetuser');
+
+		t_contains('password changing failed', $response['body'], 'a reset with the wrong code is refused');
+		t_ok(password_verify($password, $row['user_password_hash']), 'a reset with the wrong code leaves the password alone');
+		t_same($reset, $row['user_password_reset_hash'], 'a reset with the wrong code leaves the stored code in place');
+
+		$existing = 'bbbbaaaaddddcccc4444333322221111';
+		mcm_seed_session($fixture, $existing, array('probe' => 'resetting'));
+
+		$form = mcm_form_body(array(
+			'submit_new_password'      => '1',
+			'user_name'                => 'resetuser',
+			'user_password_reset_hash' => $reset,
+			'user_password_new'        => $new_password,
+			'user_password_repeat'     => $new_password,
+		));
+		$response = mcm_http($server_handle, '/password_reset.php', array('Cookie: PHPSESSID=' . $existing), 'POST', $form);
+		$row      = mcm_db_user_row($pdo, 'resetuser');
+		$session  = mcm_cookie_value($response, 'PHPSESSID');
+
+		t_contains('Password successfully changed', $response['body'], 'a reset with the right code goes through');
+		t_ok(password_verify($new_password, $row['user_password_hash']), 'the new password is the one now stored');
+		t_ok(!password_verify($password, $row['user_password_hash']), 'the old password no longer verifies');
+		t_same(null, $row['user_password_reset_hash'], 'the reset code is cleared, so it cannot be used twice');
+		t_ok($session !== '' && $session !== $existing, 'a password reset renews the session identifier');
+		t_same('', $response['log'], 'a password reset logs nothing');
+
+		// And the account can be signed in to with the new password, which is
+		// the only thing that proves the stored hash is usable rather than just
+		// different.
+		$form = mcm_form_body(array(
+			'login'         => '1',
+			'user_name'     => 'resetuser',
+			'user_password' => $new_password,
+		));
+		$response = mcm_http($server_handle, '/probe_login_state.php', array(), 'POST', $form);
+		t_same('yes', mcm_report($response['body'])['logged_in'], 'the account signs in with the new password');
+	} catch (Exception $exception) {
+		t_ok(false, 'the real-database cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server_handle);
 });

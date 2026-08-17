@@ -33,6 +33,21 @@ This repository contains a placeholder database schema and a placeholder configu
 ### Tests
 Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  Every case works on a throw-away copy of the site under the system temp directory, so running the suite never touches your checkout or your configuration.  Add `--filter=<text>` to run a single group.
 
+#### The optional database group
+One group is the exception, and it is optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.
+
+To cover those three, download a **MariaDB or MySQL binary tarball**, unpack it anywhere you like, and point the suite at the server binary inside it:
+
+```
+MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd php tests/run.php
+```
+
+A `mariadbd` or `mysqld` already on your `PATH`, or in the usual places a package puts one, is found without `MCM_TEST_MYSQLD`.  Nothing is installed and no service is started: the harness creates its own data directory, port, socket and credentials under the system temp directory, loads `/.your_database.sql` into it, and destroys all of it when the run ends.  The credentials are generated per run and exist nowhere else, and no application file changes — the server's address travels in `DB_HOST`, which the bootstrap already puts into the connection string verbatim, so `127.0.0.1;port=<port>` reaches it.
+
+Two things about the tracked schema decide whether it loads, and both are the schema's rather than the harness's:
+- Every table is `ENGINE=MyISAM`, so nothing in the application is transactional.  A case cannot roll a change back and re-seeds instead.
+- `users.user_registration_datetime` defaults to `'0000-00-00 00:00:00'`, which a server whose `sql_mode` contains `NO_ZERO_DATE` refuses — MySQL 5.7 and later have it on by default, MariaDB does not.  The dump opens with its own `SET SQL_MODE` line, and running that line as part of the load is what makes the rest of it loadable.  The application's own connections are unaffected and run on the server's default `sql_mode`, which on a current server includes `STRICT_TRANS_TABLES`; under that mode a value too long for its column is an error rather than the silent truncation older servers performed.
+
 ### Notes
 - The `/inc` directory is served-but-internal, so `/inc/.htaccess` and `/inc/config/.htaccess` deny direct web access to it.  The registration captcha at `/inc/showCaptcha.php` is the one deliberate exception, since the browser requests that image directly.
 - Config files check for the `MCM_BOOTSTRAP` constant, which is defined by `/inc/bootstrap.php` before the config is included.  This means a direct request to a config file stops immediately even if a web-server rule is missing.
