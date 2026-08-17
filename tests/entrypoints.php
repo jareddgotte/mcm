@@ -69,6 +69,79 @@ function mcm_count_calls($file, $function)
 }
 
 /**
+ * The arguments of every header() call in a file, one flat token string per
+ * call.
+ *
+ * Reading the call's own tokens is what makes this usable as evidence: a
+ * comment about the Host header, or a mention of it elsewhere in the file,
+ * cannot be mistaken for a header the file actually sends.
+ */
+function mcm_header_calls($file)
+{
+	$tokens = mcm_tokens($file);
+	$total  = count($tokens);
+	$calls  = array();
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_STRING || strcasecmp($token['text'], 'header') !== 0) {
+			continue;
+		}
+		if (!isset($tokens[$index + 1]) || $tokens[$index + 1]['text'] !== '(') {
+			continue;
+		}
+		if (isset($tokens[$index - 1])) {
+			$previous = $tokens[$index - 1]['id'];
+			if ($previous === T_FUNCTION || $previous === T_OBJECT_OPERATOR || $previous === T_DOUBLE_COLON) {
+				continue;
+			}
+		}
+
+		$depth = 0;
+		$parts = array();
+		for ($cursor = $index + 1; $cursor < $total; $cursor++) {
+			$text = $tokens[$cursor]['text'];
+			if ($text === '(') {
+				$depth++;
+				if ($depth === 1) {
+					continue;
+				}
+			}
+			if ($text === ')') {
+				$depth--;
+				if ($depth === 0) {
+					break;
+				}
+			}
+			$parts[] = $text;
+		}
+		$calls[] = implode(' ', $parts);
+	}
+	return $calls;
+}
+
+/**
+ * Every header() call in $files that names something from the request itself,
+ * as "<file>: <call>" lines.
+ *
+ * A destination built from the request's Host header is a destination the
+ * request chooses, which is the defect this check exists to keep out.
+ */
+function mcm_request_derived_headers(array $files, $root)
+{
+	$found = array();
+
+	foreach ($files as $file) {
+		foreach (mcm_header_calls($file) as $call) {
+			if (preg_match('/HTTP_HOST|SERVER_NAME|HTTP_X_FORWARDED_HOST/', $call)) {
+				$name = strpos($file, $root) === 0 ? substr($file, strlen($root) + 1) : $file;
+				$found[] = $name . ': ' . $call;
+			}
+		}
+	}
+	return $found;
+}
+
+/**
  * Count "new <Class>" expressions naming a class, ignoring comments.
  *
  * Reading tokens rather than text matters as much here as it does for
@@ -157,6 +230,60 @@ function mcm_php_sources($root)
 			} elseif (substr($entry, -4) === '.php') {
 				$found[] = $path;
 			}
+		}
+	}
+
+	sort($found);
+	return $found;
+}
+
+/** Every web-server rule file in the project. */
+function mcm_htaccess_files($root)
+{
+	$found = array();
+	$queue = array($root);
+
+	while (count($queue) > 0) {
+		$directory = array_shift($queue);
+		foreach (scandir($directory) as $entry) {
+			if ($entry === '.' || $entry === '..' || $entry === '.git' || $entry === 'tests') {
+				continue;
+			}
+			$path = $directory . '/' . $entry;
+			if (is_dir($path)) {
+				$queue[] = $path;
+			} elseif ($entry === '.htaccess') {
+				$found[] = $path;
+			}
+		}
+	}
+
+	sort($found);
+	return $found;
+}
+
+/**
+ * Files that would put an HSTS header on a response, as project-relative names.
+ *
+ * Comments are not code, and this distinction is the point: the configuration
+ * example explains in prose why the site does not send this header, and saying
+ * so must not read as sending it. PHP is taken through the tokenizer, which
+ * drops comments, and comment lines are stripped from the web-server rules.
+ */
+function mcm_hsts_sources($root)
+{
+	$found = array();
+
+	foreach (mcm_php_sources($root) as $file) {
+		if (stripos(mcm_flat_source($file), 'Strict-Transport-Security') !== false) {
+			$found[] = substr($file, strlen($root) + 1);
+		}
+	}
+
+	foreach (mcm_htaccess_files($root) as $file) {
+		$rules = preg_replace('/^\s*#.*$/m', '', file_get_contents($file));
+		if (stripos($rules, 'Strict-Transport-Security') !== false) {
+			$found[] = substr($file, strlen($root) + 1);
 		}
 	}
 

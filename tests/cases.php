@@ -3,11 +3,11 @@
 /**
  * The cases.
  *
- * Seven groups, matching what the shared bootstrap is responsible for:
+ * Eight groups, matching what the shared bootstrap is responsible for:
  * configuration, a single session startup, the session cookie's attributes,
  * compatibility with sessions and remember-me cookies that already exist, error
- * handling, what a database failure does to a request, and every entry point
- * loading the bootstrap.
+ * handling, where a redirect is allowed to send a visitor, what a database
+ * failure does to a request, and every entry point loading the bootstrap.
  *
  * The machinery they are written against lives in tests/run.php.
  */
@@ -419,7 +419,301 @@ t_group('error handling', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 6. Database failures
+ * 6. Redirects, the canonical host, and HTTPS
+ * ---------------------------------------------------------------------------
+ *
+ * The host a redirect names has to come from the configuration, never from the
+ * request. "movies.example.test" below is the configured host; "attacker.example"
+ * is what a request asks for, and must never come back.
+ */
+
+t_group('canonical host and https', function () {
+	$canonical = 'movies.example.test';
+	$origin    = 'https://' . $canonical;
+
+	/* Whole-source checks ---------------------------------------------------- */
+
+	// inc/libs/ is third-party code, and PHPMailer reads SERVER_NAME to name the
+	// sending host in a mail header, which is not a redirect. Everything the
+	// project itself wrote is covered.
+	$ours = array();
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		if (strpos($file, MCM_REPO_ROOT . '/inc/libs/') !== 0) {
+			$ours[] = $file;
+		}
+	}
+	t_ok(count($ours) >= 20, 'the application sources were found', count($ours) . ' found');
+	t_same(array(), mcm_request_derived_headers($ours, MCM_REPO_ROOT), 'no response header is built from the request host');
+
+	// HSTS is deliberately not part of this: a browser remembers it for far
+	// longer than the switch that turns the redirect off, and this site is
+	// deployed by hand.
+	t_same(array(), mcm_hsts_sources(MCM_REPO_ROOT), 'nothing enables strict transport security');
+
+	// Both checks are pointed at deliberately broken copies, because a check
+	// that cannot fail proves nothing. Nothing here touches the checkout.
+	$fixture = mcm_fixture('redirect-static');
+	$broken  = $fixture['public'] . '/broken_redirect.php';
+
+	file_put_contents($broken, "<?php\n\nheader('Location: http://' . \$_SERVER['HTTP_HOST'] . '/index.php');\n");
+	t_same(
+		array('broken_redirect.php: \'Location: http://\' . $_SERVER [ \'HTTP_HOST\' ] . \'/index.php\''),
+		mcm_request_derived_headers(array($broken), $fixture['public']),
+		'the check catches a redirect built from the request host'
+	);
+
+	// The same line as a comment is not a redirect, and neither is the constant
+	// on its own. Both appear in the real sources, which is why this matters.
+	file_put_contents($broken, "<?php\n\n// header('Location: http://' . \$_SERVER['HTTP_HOST'] . '/');\n\$host = \$_SERVER['HTTP_HOST'];\n");
+	t_same(array(), mcm_request_derived_headers(array($broken), $fixture['public']), 'the check ignores a mention that sends no header');
+
+	file_put_contents($fixture['public'] . '/.htaccess', "# Strict-Transport-Security stays out of this file\nOptions -Indexes\n");
+	t_same(array(), mcm_hsts_sources($fixture['public']), 'the HSTS check ignores a comment about it');
+
+	file_put_contents($fixture['public'] . '/.htaccess', "Header always set Strict-Transport-Security \"max-age=31536000\"\n");
+	t_same(array('.htaccess'), mcm_hsts_sources($fixture['public']), 'the HSTS check catches a web-server rule that sets it');
+
+	unlink($broken);
+	unlink($fixture['public'] . '/.htaccess');
+
+	/* What goes into a Location header ---------------------------------------- */
+
+	// With a canonical host configured, every destination comes back absolute,
+	// HTTPS, and on that host - whatever was handed in.
+	$fixture = mcm_fixture('redirect-targets', array('config' => array(
+		'MCM_CANONICAL_HOST' => $canonical,
+		'MCM_FORCE_HTTPS'    => false,
+	)));
+	$result = mcm_cli($fixture, 'probe_redirect.php');
+	$report = mcm_report($result['stdout']);
+
+	t_same(0, $result['status'], 'the redirect probe runs');
+	t_same($origin, $report['origin'], 'the canonical origin is the configured host over HTTPS');
+
+	$targets = array(
+		'target_root'              => $origin . '/',
+		'target_page'              => $origin . '/index.php',
+		'target_query'             => $origin . '/share.php?id=7',
+		'target_subdir'            => $origin . '/movies',
+		// A destination without a leading slash is still a destination here.
+		'target_bare'              => $origin . '/index.php',
+		'target_empty'             => $origin . '/',
+		// The paths below arrive naming another site. Only the path survives.
+		'target_absolute'          => $origin . '/index.php',
+		'target_origin_only'       => $origin . '/',
+		'target_protocol_relative' => $origin . '/attacker.example/index.php',
+		'target_backslashed'       => $origin . '/attacker.example/index.php',
+	);
+	foreach ($targets as $name => $expected) {
+		t_same($expected, isset($report[$name]) ? $report[$name] : '(absent)', 'redirect target: ' . substr($name, 7));
+	}
+
+	// Whatever the destination, the visitor cannot be sent off this site, and
+	// nothing can be smuggled into the header after it.
+	foreach ($report as $name => $value) {
+		if (strpos($name, 'target_') !== 0) {
+			continue;
+		}
+		t_ok(strpos($value, $origin . '/') === 0, 'redirect target ' . substr($name, 7) . ' stays on the canonical origin', $value);
+	}
+	t_lacks('X-Injected', $report['target_injected_header'], 'a destination cannot smuggle a second header in');
+	t_same($origin . '/index.php', $report['target_injected_header'], 'a destination stops at the first control character');
+
+	// With no canonical host the site keeps working: the destinations are the
+	// same places, named relative to whatever host the visitor is on, and the
+	// request still cannot choose the host.
+	$fixture = mcm_fixture('redirect-relative');
+	$report  = mcm_report(mcm_cli($fixture, 'probe_redirect.php')['stdout']);
+
+	t_same('', $report['origin'], 'no configured host means no origin');
+	t_same('no', $report['enforced'], 'HTTPS is not enforced without a host to enforce it to');
+	t_same('/index.php', $report['target_page'], 'a destination stays a path on the current host');
+	t_same('/share.php?id=7', $report['target_query'], 'a relative destination keeps its query');
+	t_same('/index.php', $report['target_absolute'], 'a destination naming another site loses it');
+	t_same('/attacker.example/index.php', $report['target_protocol_relative'], 'a protocol-relative destination becomes a path');
+	foreach ($report as $name => $value) {
+		if (strpos($name, 'target_') === 0) {
+			t_ok(substr($value, 0, 2) !== '//', 'relative target ' . substr($name, 7) . ' cannot be read as another origin', $value);
+		}
+	}
+
+	// A canonical host written as a URL means the same thing as a bare one.
+	$fixture = mcm_fixture('redirect-host-forms', array('config' => array(
+		'MCM_CANONICAL_HOST' => 'https://' . $canonical . '/',
+		'MCM_FORCE_HTTPS'    => false,
+	)));
+	$report = mcm_report(mcm_cli($fixture, 'probe_redirect.php')['stdout']);
+	t_same($origin, $report['origin'], 'a canonical host written as a URL is understood');
+
+	$fixture = mcm_fixture('redirect-host-path', array('config' => array(
+		'MCM_CANONICAL_HOST' => $canonical . '/movies/',
+		'MCM_FORCE_HTTPS'    => false,
+	)));
+	$report = mcm_report(mcm_cli($fixture, 'probe_redirect.php')['stdout']);
+	t_same($origin, $report['origin'], 'a path written after the canonical host is dropped');
+
+	// One that cannot be a host is refused rather than used, and the site stays
+	// up on relative redirects while the log says what is wrong.
+	$fixture = mcm_fixture('redirect-host-invalid', array('config' => array(
+		'MCM_CANONICAL_HOST' => 'not a host name',
+	)));
+	$result = mcm_cli($fixture, 'probe_redirect.php');
+	$report = mcm_report($result['stdout']);
+	t_same(0, $result['status'], 'an unusable canonical host does not break the page');
+	t_same('', $report['origin'], 'an unusable canonical host is not used');
+	t_same('/index.php', $report['target_page'], 'an unusable canonical host falls back to a path');
+	t_contains('MCM_CANONICAL_HOST is not a usable host name', $result['log'], 'an unusable canonical host is logged');
+
+	/* The enforcement path, over the wire -------------------------------------- */
+
+	$fixture = mcm_fixture('https-forced', array('config' => array(
+		'MCM_CANONICAL_HOST' => $canonical,
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		t_same(302, $response['status'], 'a plain HTTP request is redirected');
+		t_same(array($origin . '/probe.php'), mcm_header_values($response, 'Location'), 'the redirect goes to the same address over HTTPS');
+		t_same(0, count(mcm_header_values($response, 'Set-Cookie')), 'no session cookie is issued over plain HTTP');
+		t_same(array(), mcm_header_values($response, 'Strict-Transport-Security'), 'the redirect carries no HSTS header');
+		t_same('', $response['log'], 'the redirect logs nothing');
+
+		$response = mcm_http($server, '/probe.php?list=7&sort=title');
+		t_same(array($origin . '/probe.php?list=7&sort=title'), mcm_header_values($response, 'Location'), 'the redirect keeps the query string');
+
+		// The whole point: the request asks to be sent somewhere else and is not.
+		$response = mcm_http($server, '/probe.php', array('Host: attacker.example'));
+		t_same(array($origin . '/probe.php'), mcm_header_values($response, 'Location'), 'a spoofed Host header does not change the destination');
+		t_lacks('attacker.example', implode(' ', mcm_header_values($response, 'Location')), 'the spoofed host is not handed back');
+
+		// A form submission has to keep its method, or the visitor loses what
+		// they typed.
+		$response = mcm_http($server, '/probe.php', array(), 'POST');
+		t_same(307, $response['status'], 'a form submission is redirected without changing method');
+		t_same(array($origin . '/probe.php'), mcm_header_values($response, 'Location'), 'a form submission is redirected to HTTPS');
+
+		// Permanence is what makes a redirect hard to take back.
+		t_ok(mcm_http($server, '/probe.php')['status'] !== 301, 'the redirect is not a permanent one');
+
+		// The captcha is requested by the browser directly and goes the same way.
+		$response = mcm_http($server, '/inc/showCaptcha.php');
+		t_same(302, $response['status'], 'the captcha endpoint is redirected too');
+		t_same(array($origin . '/inc/showCaptcha.php'), mcm_header_values($response, 'Location'), 'the captcha redirect keeps its address');
+
+		// A request that already arrived over HTTPS is served, not redirected.
+		$response = mcm_http($server, '/probe_https.php');
+		t_same(200, $response['status'], 'an HTTPS request is served rather than redirected');
+		t_contains('bootstrap=defined', $response['body'], 'an HTTPS request still gets its page');
+		t_same(1, count(mcm_header_values($response, 'Set-Cookie')), 'an HTTPS request still gets its session cookie');
+
+		// The forwarded header is a client-supplied claim, and is not believed
+		// unless the configuration says there is a proxy setting it.
+		$response = mcm_http($server, '/probe.php', array('X-Forwarded-Proto: https'));
+		t_same(302, $response['status'], 'a forwarded-protocol header is ignored by default');
+	} catch (Exception $exception) {
+		t_ok(false, 'the HTTPS enforcement cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// The command line has no request to redirect, so the suite's own CLI cases
+	// and any maintenance script keep working.
+	$report = mcm_report(mcm_cli($fixture, 'probe_redirect.php')['stdout']);
+	t_same('yes', $report['enforced'], 'enforcement is on for this fixture');
+	t_same($origin . '/index.php', $report['target_page'], 'a command line run is not redirected');
+
+	/* Turning it off ----------------------------------------------------------- */
+
+	// The way back, if HTTPS turns out wrong on the live site: one line in the
+	// configuration, no code change.
+	$fixture = mcm_fixture('https-switched-off', array('config' => array(
+		'MCM_CANONICAL_HOST' => $canonical,
+		'MCM_FORCE_HTTPS'    => false,
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		t_same(200, $response['status'], 'MCM_FORCE_HTTPS false serves plain HTTP again');
+		t_contains('bootstrap=defined', $response['body'], 'the page comes back after enforcement is switched off');
+		t_same(array(), mcm_header_values($response, 'Location'), 'nothing is redirected once enforcement is off');
+
+		// The host in a redirect is still the configured one: switching
+		// enforcement off does not put the request back in charge.
+		$response = mcm_http($server, '/probe_redirect.php', array('Host: attacker.example'));
+		t_contains('target_page=' . $origin . '/index.php', $response['body'], 'redirects still name the configured host');
+		t_lacks('//attacker.example', $response['body'], 'the request host is still never an origin');
+	} catch (Exception $exception) {
+		t_ok(false, 'the switched-off cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// MCM_FORCE_HTTPS on its own cannot enforce anything: there is no HTTPS
+	// address to send anyone to that the request did not supply.
+	$fixture = mcm_fixture('https-forced-without-host', array('config' => array(
+		'MCM_FORCE_HTTPS' => true,
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		t_same(200, $response['status'], 'enforcement without a canonical host serves the page');
+		t_contains('MCM_FORCE_HTTPS is on but MCM_CANONICAL_HOST is not set', $response['log'], 'enforcement without a canonical host is logged');
+	} catch (Exception $exception) {
+		t_ok(false, 'the enforcement-without-a-host case ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	/* A proxy that terminates TLS ---------------------------------------------- */
+
+	// Where the web server never sees the TLS itself, believing the proxy is
+	// the difference between a working site and an endless redirect.
+	$fixture = mcm_fixture('https-forwarded', array('config' => array(
+		'MCM_CANONICAL_HOST'        => $canonical,
+		'MCM_TRUST_FORWARDED_PROTO' => true,
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php', array('X-Forwarded-Proto: https'));
+		t_same(200, $response['status'], 'a trusted proxy reporting HTTPS is served, not redirected');
+
+		$response = mcm_http($server, '/probe.php', array('X-Forwarded-Proto: http'));
+		t_same(302, $response['status'], 'a trusted proxy reporting plain HTTP is still redirected');
+	} catch (Exception $exception) {
+		t_ok(false, 'the forwarded-protocol cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	/* The application route this started with ---------------------------------- */
+
+	// share.php with no list on it has always redirected to the directory it
+	// lives in. It still does; it just no longer lets the request pick the host.
+	$fixture = mcm_fixture('share-redirect');
+	$server  = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/share.php', array('Host: attacker.example'));
+		t_same(302, $response['status'], 'a share link with no list still redirects');
+		t_same(array('/'), mcm_header_values($response, 'Location'), 'the share redirect still goes to the site root');
+		t_lacks('attacker.example', implode(' ', mcm_header_values($response, 'Location')), 'the share redirect cannot be pointed at another site');
+	} catch (Exception $exception) {
+		t_ok(false, 'the share redirect case ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	$fixture = mcm_fixture('share-redirect-canonical', array('config' => array(
+		'MCM_CANONICAL_HOST' => $canonical,
+		'MCM_FORCE_HTTPS'    => false,
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/share.php', array('Host: attacker.example'));
+		t_same(array($origin . '/'), mcm_header_values($response, 'Location'), 'the share redirect uses the configured host over HTTPS');
+	} catch (Exception $exception) {
+		t_ok(false, 'the canonical share redirect case ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 7. Database failures
  * ---------------------------------------------------------------------------
  *
  * No database is involved in running these: an outage is simulated by pointing
@@ -613,7 +907,7 @@ t_group('database failure', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 7. Entry-point inclusion
+ * 8. Entry-point inclusion
  * ---------------------------------------------------------------------------
  */
 

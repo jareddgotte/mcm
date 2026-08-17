@@ -62,6 +62,16 @@ the application. Setup is documented in `README.md`.
   load the bootstrap first. Both are asserted by `php tests/run.php`.
 - The session cookie name stays at the server default. Renaming it would sign
   out every visitor of the live site.
+- Redirects go through `mcm_redirect()` / `mcm_redirect_target()` in the
+  bootstrap. Never build a destination from `HTTP_HOST`, `SERVER_NAME` or
+  `PHP_SELF`: the host comes from `MCM_CANONICAL_HOST` or is left out
+  altogether, and the path from `SCRIPT_NAME`. `php tests/run.php` asserts that
+  no `header()` call in the project's own code reads the request host.
+- HTTPS enforcement lives in the bootstrap, ahead of `session_start()` so no
+  cookie goes out over plain HTTP, and is temporary (302/307) on purpose:
+  `define('MCM_FORCE_HTTPS', false)` has to be able to take it back. Strict
+  transport security is deliberately absent for the same reason and the suite
+  asserts it stays absent.
 - Configuration is layered: `inc/config/config.php` (untracked, real values)
   wins, and the bootstrap fills in safe defaults for anything it omits.
   `inc/config/example_config.php` is tracked and must only ever hold
