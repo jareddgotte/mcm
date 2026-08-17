@@ -445,9 +445,8 @@ function mcm_server_stop(array $server)
  *
  * @param string $method GET unless a case needs the request method itself to
  *                       matter, as the method-preserving redirect does
- * @param string $body   request body, for the form submissions the login and
- *                       password-reset paths are driven by; a form content type
- *                       is added unless the caller names one
+ * @param string $body   the request body; a form-encoded content type is added
+ *                       unless $headers already set one
  * @return array status, headers, body, log
  */
 function mcm_http(array $server, $path, array $headers = array(), $method = 'GET', $body = '')
@@ -466,9 +465,11 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 	);
 	if (strtoupper($method) !== 'GET' && strtoupper($method) !== 'HEAD') {
 		// A request with a method that may carry a body has to say how long the
-		// body is, even when it is empty, or the server waits for one.
+		// body is - zero included, or the server waits for one.
 		$lines[] = 'Content-Length: ' . strlen($body);
-		if ($body !== '') {
+		// A body PHP is meant to parse into $_POST needs a content type too, and
+		// a case that sets its own keeps it.
+		if ($body !== '' && !mcm_has_header($headers, 'Content-Type')) {
 			$lines[] = 'Content-Type: application/x-www-form-urlencoded';
 		}
 	}
@@ -524,6 +525,23 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 	);
 }
 
+/** Whether a request header line for this name was supplied by the case. */
+function mcm_has_header(array $headers, $name)
+{
+	foreach ($headers as $header) {
+		if (stripos($header, $name . ':') === 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Make one POST, with the fields form-encoded exactly as a browser or jQuery sends them. */
+function mcm_http_post(array $server, $path, array $fields = array(), array $headers = array())
+{
+	return mcm_http($server, $path, $headers, 'POST', http_build_query($fields));
+}
+
 /** Replace a request header line of that name, or append it when there is none. */
 function mcm_replace_header(array $lines, $name, $replacement)
 {
@@ -546,6 +564,21 @@ function mcm_form_body(array $fields)
 		$parts[] = urlencode($name) . '=' . urlencode($value);
 	}
 	return implode('&', $parts);
+}
+
+/**
+ * Every response header as one "name: value" block.
+ *
+ * The body is not the only thing a client reads, so a case that asserts private
+ * detail did not reach the client has to look here too.
+ */
+function mcm_header_text(array $response)
+{
+	$text = '';
+	foreach ($response['headers'] as $header) {
+		$text .= $header[0] . ': ' . $header[1] . "\n";
+	}
+	return $text;
 }
 
 /** All values of one response header, in the order they arrived. */
