@@ -572,7 +572,7 @@ t_group('output escaping', function () {
 	$rendering = array_merge(mcm_entry_points(MCM_REPO_ROOT), glob(MCM_REPO_ROOT . '/inc/views/*.php'));
 	foreach ($rendering as $file) {
 		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
-		t_same(array(), mcm_escaping_problems($file), $name . ' escapes every request value it renders');
+		t_same(array(), mcm_escaping_problems($file), $name . ' reads no request value outside a statement that names an escaping helper');
 	}
 
 	// The check has to have teeth, so it is pointed at deliberately broken
