@@ -152,7 +152,7 @@ the application. Setup is documented in `README.md`.
 
 ## Sharp edges
 
-- The live site is deployed by hand, file by file, so every change must be
+- Deployment of the live site is manual, so every change must be
   additive and leave the site working at each intermediate step.
 - Failure detail belongs in the server-side log only; the client gets the
   generic message. Do not add `echo $e->getMessage()` style output.

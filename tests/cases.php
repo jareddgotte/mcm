@@ -464,7 +464,7 @@ t_group('canonical host and https', function () {
 
 	// HSTS is deliberately not part of this: a browser remembers it for far
 	// longer than the switch that turns the redirect off, and this site is
-	// deployed by hand.
+	// deployed manually.
 	t_same(array(), mcm_hsts_sources(MCM_REPO_ROOT), 'nothing enables strict transport security');
 
 	// Both checks are pointed at deliberately broken copies, because a check
