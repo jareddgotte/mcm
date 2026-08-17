@@ -9,10 +9,13 @@
  * handling, where a redirect is allowed to send a visitor, what a database
  * failure does to a request, and every entry point loading the bootstrap.
  *
- * Three more cover the shared security primitives in inc/security.php and
- * the way inc/classes/Login.php and inc/classes/Registration.php use them:
- * token generation, password compatibility, and renewing the session identifier
+ * Three cover the shared security primitives in inc/security.php and the way
+ * inc/classes/Login.php and inc/classes/Registration.php use them: token
+ * generation, password compatibility, and renewing the session identifier
  * whenever a visitor's authentication state changes.
+ *
+ * Four cover inc/guards.php: what each guard allows, what it refuses, what a
+ * refusal is allowed to say, and the fact that nothing calls any of it yet.
  *
  * The last two cover what the bootstrap's escaping helpers do with a hostile
  * string, and the bounded validation a submitted list name has to pass.
@@ -1319,7 +1322,464 @@ PHP;
 
 /*
  * ---------------------------------------------------------------------------
- * 12. Escaping what the server renders
+ * 12. The guard helpers that answer without a request
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('guard helpers', function () {
+	$fixture = mcm_fixture('guard-units');
+	$result  = mcm_cli($fixture, 'guard_units.php');
+	$report  = mcm_report($result['stdout']);
+
+	t_same(0, $result['status'], 'the helper page runs cleanly');
+	t_same('', $result['log'], 'the helpers log nothing of their own');
+
+	// Identifiers. Everything that is not a run of digits is refused, so a
+	// caller can never hand a query or a comparison something else.
+	$identifiers = array(
+		'positive_int_int'      => '7',
+		'positive_int_string'   => "7",
+		'positive_int_padded'   => '7',
+		'positive_int_zero'     => 'NULL',
+		'positive_int_negative' => 'NULL',
+		'positive_int_empty'    => 'NULL',
+		'positive_int_trailing' => 'NULL',
+		'positive_int_sql'      => 'NULL',
+		'positive_int_spaced'   => 'NULL',
+		'positive_int_float'    => 'NULL',
+		'positive_int_bool'     => 'NULL',
+		'positive_int_null'     => 'NULL',
+		'positive_int_array'    => 'NULL',
+	);
+	foreach ($identifiers as $name => $expected) {
+		t_same($expected, isset($report[$name]) ? $report[$name] : '(absent)', 'identifier: ' . substr($name, 13));
+	}
+
+	// The constant-time comparison. A difference anywhere is still a difference,
+	// and a prefix of the right answer is not the right answer.
+	$comparisons = array(
+		'equals_same'         => 'true',
+		'equals_first_byte'   => 'false',
+		'equals_last_byte'    => 'false',
+		'equals_prefix'       => 'false',
+		'equals_longer'       => 'false',
+		'equals_both_empty'   => 'true',
+		'equals_known_empty'  => 'false',
+		'equals_given_empty'  => 'false',
+		// A caller that forwards whatever arrived in the request must not be
+		// able to turn a comparison into a TypeError.
+		'equals_non_string'   => 'false',
+	);
+	foreach ($comparisons as $name => $expected) {
+		t_same($expected, isset($report[$name]) ? $report[$name] : '(absent)', 'comparison: ' . $name);
+	}
+
+	// Tokens.
+	t_same('64', $report['token_length'], 'a token is 64 hex characters');
+	t_same('true', $report['token_hex'], 'a token is hex and nothing else');
+	t_same('true', $report['token_unique'], 'two tokens in one request differ');
+
+	// The command line has no request method, so nothing there is a POST.
+	t_same('', $report['method'], 'there is no request method outside a request');
+	t_same('false', $report['is_post'], 'nothing outside a request is a POST');
+
+	// Anything from the client that reaches a log line is one line, and short.
+	t_same('list 11', $report['log_detail_plain'], 'ordinary detail is passed through');
+	t_same('first?second??third', $report['log_detail_control'], 'a value cannot break the log into more lines');
+	t_same('103', $report['log_detail_length'], 'a long value is truncated');
+
+	// The other half of the same rule: a rendering that keeps only the type is
+	// not a diagnostic. A value that is not a string still has to arrive in the
+	// log as itself, which is why each of these asserts the value and not just
+	// the word in front of it. The application may not call var_export() and
+	// friends at all (see the debug-output check), so this is the rendering that
+	// has to carry them.
+	t_same('boolean true', $report['log_detail_true'], 'a true value reaches the log as its value');
+	t_same('boolean false', $report['log_detail_false'], 'a false value reaches the log as its value');
+	t_same('null', $report['log_detail_null'], 'a null value reaches the log as its value');
+	t_same('integer 11', $report['log_detail_int'], 'an integer reaches the log as its value');
+	t_same('double 1.5', $report['log_detail_float'], 'a float reaches the log as its value');
+	// Only what cannot be written on one line falls back to the type alone.
+	t_same('array', $report['log_detail_non_string'], 'a value with no one-line rendering is reduced to its type');
+
+	// The refusal bodies: fixed strings, chosen so that two different reasons
+	// sharing a status are indistinguishable from outside.
+	t_same('{"error":"bad_request","message":"The request could not be processed."}', $report['body_400'], 'the 400 body');
+	t_same('{"error":"authentication_required","message":"You must be signed in to do that."}', $report['body_401'], 'the 401 body');
+	t_same('{"error":"forbidden","message":"You are not allowed to do that."}', $report['body_403'], 'the 403 body');
+	t_same('{"error":"method_not_allowed","message":"That request method is not allowed here."}', $report['body_405'], 'the 405 body');
+	t_same('400', $report['status_unknown'], 'a status the catalogue does not carry becomes 400');
+	t_same('403', $report['status_known'], 'a catalogued status is kept');
+	t_same('403', $report['status_string'], 'a status that arrives as a string is still recognised');
+	t_same($report['body_400'], $report['body_unknown'], 'an uncatalogued status still gets a fixed body');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 13. Who is signed in, and which token the session holds
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('guard identity', function () {
+	$fixture = mcm_fixture('guard-identity');
+
+	// One session per shape a real one can have, including the shapes an older
+	// runtime leaves on disk.
+	$sessions = array(
+		'signed_in'      => array('id' => 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', 'data' => array('user_name' => 'signed-in-user', 'user_id' => 7, 'user_logged_in' => 1)),
+		'string_flag'    => array('id' => 'a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2', 'data' => array('user_name' => 'legacy-user', 'user_id' => '7', 'user_logged_in' => '1')),
+		'signed_out'     => array('id' => 'a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3', 'data' => array('user_name' => 'half-way-user', 'user_logged_in' => 0)),
+		'no_flag'        => array('id' => 'a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4', 'data' => array('user_name' => 'flagless-user')),
+		'no_id'          => array('id' => 'a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5', 'data' => array('user_name' => 'idless-user', 'user_logged_in' => 1)),
+		'unusable_id'    => array('id' => 'a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6', 'data' => array('user_name' => 'odd-id-user', 'user_id' => 'not-a-number', 'user_logged_in' => 1)),
+		'empty_name'     => array('id' => 'a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7', 'data' => array('user_name' => '', 'user_id' => 7, 'user_logged_in' => 1)),
+	);
+	foreach ($sessions as $session) {
+		mcm_seed_session($fixture, $session['id'], $session['data']);
+	}
+
+	$server = mcm_server_start($fixture);
+	try {
+		$expected = array(
+			// name           logged in  user id  user name
+			'signed_in'   => array('true', '7', "'signed-in-user'"),
+			'string_flag' => array('true', '7', "'legacy-user'"),
+			'signed_out'  => array('false', 'NULL', 'NULL'),
+			'no_flag'     => array('false', 'NULL', 'NULL'),
+			'no_id'       => array('true', 'NULL', "'idless-user'"),
+			'unusable_id' => array('true', 'NULL', "'odd-id-user'"),
+			'empty_name'  => array('false', 'NULL', 'NULL'),
+		);
+
+		foreach ($expected as $name => $answers) {
+			$response = mcm_http($server, '/guard_identity.php', array('Cookie: PHPSESSID=' . $sessions[$name]['id']));
+			$report   = mcm_report($response['body']);
+
+			t_same($answers[0], $report['logged_in'], $name . ': signed in?');
+			t_same($answers[1], $report['user_id'], $name . ': which user id?');
+			t_same($answers[2], $report['user_name'], $name . ': which user name?');
+		}
+
+		// A request with no session at all is nobody.
+		$report = mcm_report(mcm_http($server, '/guard_identity.php')['body']);
+		t_same('false', $report['logged_in'], 'a visitor with no session is not signed in');
+		t_same('NULL', $report['user_id'], 'a visitor with no session has no user id');
+		t_same('NULL', $report['user_name'], 'a visitor with no session has no user name');
+	} catch (Exception $exception) {
+		t_ok(false, 'the identity cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+t_group('guard csrf tokens', function () {
+	$fixture = mcm_fixture('guard-csrf');
+	$mine    = 'b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1';
+	$theirs  = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
+
+	mcm_seed_session($fixture, $mine, array('user_name' => 'signed-in-user', 'user_id' => 7, 'user_logged_in' => 1));
+	mcm_seed_session($fixture, $theirs, array('user_name' => 'another-user', 'user_id' => 8, 'user_logged_in' => 1));
+
+	$server = mcm_server_start($fixture);
+	try {
+		// A session that has never been handed a token accepts nothing, which is
+		// what stops an empty token from matching an empty session.
+		$report = mcm_report(mcm_http($server, '/guard_csrf.php', array('Cookie: PHPSESSID=' . $mine))['body']);
+
+		t_same('(none)', $report['session_token_before'], 'a fresh session carries no token');
+		t_same('false', $report['valid_submitted'], 'a session with no token of its own accepts nothing');
+		t_same('false', $report['valid_empty'], 'an empty token is refused');
+		t_same('false', $report['valid_stranger'], "a token this session never held is refused");
+		t_same('false', $report['valid_array'], 'a token that is not a string is refused');
+
+		$token = $report['token'];
+		t_matches('/^[0-9a-f]{64}$/', $token, 'the token handed out is 32 random bytes in hex');
+		t_same($token, $report['token_again'], 'asking twice in one request gives the same token');
+
+		// The token lasts as long as the session: a second tab must not
+		// invalidate the first.
+		$report = mcm_report(mcm_http($server, '/guard_csrf.php', array('Cookie: PHPSESSID=' . $mine))['body']);
+		t_same($token, $report['session_token_before'], 'the session keeps the token it was given');
+		t_same($token, $report['token'], 'a later request is handed the same token');
+
+		// The allow path, in both the shapes a caller can submit.
+		$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array('csrf_token' => $token), array('Cookie: PHPSESSID=' . $mine))['body']);
+		t_same('POST', $report['method'], 'the request arrived as a POST');
+		t_same('true', $report['is_post'], 'a POST is recognised as one');
+		t_same($token, $report['submitted'], 'the submitted field is read');
+		t_same('true', $report['valid_submitted'], 'the session token submitted as a field is accepted');
+
+		$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array(), array(
+			'Cookie: PHPSESSID=' . $mine,
+			'X-CSRF-Token: ' . $token,
+		))['body']);
+		t_same('true', $report['valid_submitted'], 'the session token submitted as a header is accepted');
+
+		// The reject paths. Every one of these is a token that is almost right.
+		$wrong = array(
+			'a token with its last character changed' => substr($token, 0, 63) . ($token[63] === 'f' ? 'e' : 'f'),
+			'a token with its first character changed' => ($token[0] === 'f' ? 'e' : 'f') . substr($token, 1),
+			'a token missing its last character' => substr($token, 0, 63),
+			'a token with a character added'     => $token . 'a',
+			'the same token upper-cased'         => strtoupper($token),
+			'an empty token'                     => '',
+		);
+		foreach ($wrong as $description => $candidate) {
+			$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array('csrf_token' => $candidate), array('Cookie: PHPSESSID=' . $mine))['body']);
+			t_same('false', $report['valid_submitted'], 'refused: ' . $description);
+		}
+
+		// A field that is not a string at all cannot be mistaken for one.
+		$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array('csrf_token' => array($token)), array('Cookie: PHPSESSID=' . $mine))['body']);
+		t_same('(none)', $report['submitted'], 'a token submitted as an array is not read as a token');
+		t_same('false', $report['valid_submitted'], 'refused: a token submitted as an array');
+
+		// One session's token is worthless in another.
+		$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array('csrf_token' => $token), array('Cookie: PHPSESSID=' . $theirs))['body']);
+		t_same('false', $report['valid_submitted'], "refused: another session's token");
+		t_ok($report['token'] !== $token, 'each session is handed its own token');
+	} catch (Exception $exception) {
+		t_ok(false, 'the CSRF token cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 14. What each guard allows, and what it refuses
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('guard rejections', function () {
+	$fixture    = mcm_fixture('guard-rejections');
+	$seed       = $fixture['seed'];
+	$signed_in  = 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1';
+	$signed_out = 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2';
+	$other_user = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
+
+	mcm_seed_session($fixture, $signed_in, array('user_name' => 'signed-in-user', 'user_id' => 7, 'user_logged_in' => 1));
+	mcm_seed_session($fixture, $signed_out, array('user_name' => 'signed-out-user', 'user_logged_in' => 0));
+	mcm_seed_session($fixture, $other_user, array('user_name' => 'another-user', 'user_id' => 8, 'user_logged_in' => 1));
+
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$wrong_method = '{"error":"method_not_allowed","message":"That request method is not allowed here."}';
+
+	$server = mcm_server_start($fixture);
+	try {
+		/* POST-only. */
+		$response = mcm_http_post($server, '/guard_require_post.php');
+		t_same(200, $response['status'], 'require_post allows a POST');
+		t_same("reached\n", $response['body'], 'require_post lets the page run');
+
+		$response = mcm_http($server, '/guard_require_post.php');
+		t_same(405, $response['status'], 'require_post refuses a GET');
+		t_same($wrong_method, $response['body'], 'require_post answers with the fixed body');
+		t_lacks('reached', $response['body'], 'require_post stops the page');
+		t_contains('POST', implode('', mcm_header_values($response, 'Allow')), 'a refused method is told which one is allowed');
+		t_contains('application/json', implode('', mcm_header_values($response, 'Content-Type')), 'a refusal is JSON');
+		// The exact value, not a substring: the session's own cache limiter
+		// already emits "no-store, no-cache, must-revalidate", so a substring
+		// check here would pass whether or not the refusal set anything.
+		t_same(array('no-store'), mcm_header_values($response, 'Cache-Control'), 'a refusal replaces the caching headers with its own');
+		t_contains('method GET is not allowed here', $response['log'], 'the refused method is logged');
+
+		/* Signed in. */
+		$response = mcm_http_post($server, '/guard_require_login.php', array(), array('Cookie: PHPSESSID=' . $signed_in));
+		t_same(200, $response['status'], 'require_login allows a signed-in user');
+		t_same("reached user=signed-in-user\n", $response['body'], 'require_login lets the page run');
+
+		foreach (array('no session' => '', 'a signed-out session' => $signed_out) as $description => $session) {
+			$headers  = $session === '' ? array() : array('Cookie: PHPSESSID=' . $session);
+			$response = mcm_http_post($server, '/guard_require_login.php', array(), $headers);
+
+			t_same(401, $response['status'], 'require_login refuses ' . $description);
+			t_same($unauthorised, $response['body'], 'require_login answers ' . $description . ' with the fixed body');
+			t_lacks('reached', $response['body'], 'require_login stops the page for ' . $description);
+			t_contains('no signed-in user', $response['log'], 'the reason is logged for ' . $description);
+		}
+
+		/* CSRF. */
+		$token = mcm_report(mcm_http($server, '/guard_csrf.php', array('Cookie: PHPSESSID=' . $signed_in))['body'])['token'];
+
+		$response = mcm_http_post($server, '/guard_require_csrf.php', array('csrf_token' => $token), array('Cookie: PHPSESSID=' . $signed_in));
+		t_same(200, $response['status'], 'require_csrf allows the session token');
+		t_same("reached\n", $response['body'], 'require_csrf lets the page run');
+
+		$refused = array(
+			'no token at all'            => array(),
+			'an empty token'             => array('csrf_token' => ''),
+			'a token that is almost right' => array('csrf_token' => substr($token, 0, 63) . ($token[63] === 'f' ? 'e' : 'f')),
+			"another session's token"    => array('csrf_token' => str_repeat('9', 64)),
+		);
+		foreach ($refused as $description => $fields) {
+			$response = mcm_http_post($server, '/guard_require_csrf.php', $fields, array('Cookie: PHPSESSID=' . $signed_in));
+
+			t_same(403, $response['status'], 'require_csrf refuses ' . $description);
+			t_same($forbidden, $response['body'], 'require_csrf answers ' . $description . ' with the fixed body');
+			t_lacks('reached', $response['body'], 'require_csrf stops the page for ' . $description);
+			t_contains('no valid CSRF token', $response['log'], 'the reason is logged for ' . $description);
+			t_lacks($token, $response['log'], 'the session token is never written to the log for ' . $description);
+		}
+
+		/* Ownership. */
+		$response = mcm_http_post($server, '/guard_ownership.php');
+		$report   = mcm_report($response['body']);
+
+		if (isset($report['sqlite']) && $report['sqlite'] === 'missing') {
+			t_skip('the ownership cases', 'this runtime has no SQLite driver to build the fixture table with');
+		} else {
+			$ownership = array(
+				'own_list'            => 'true',
+				'own_list_as_strings' => 'true',
+				'other_users_list'    => 'false',
+				'missing_list'        => 'false',
+				'injected_id'         => 'false',
+				'zero_id'             => 'false',
+				'empty_id'            => 'false',
+				'no_user'             => 'false',
+				'zero_user'           => 'false',
+			);
+			foreach ($ownership as $name => $expected) {
+				t_same($expected, isset($report[$name]) ? $report[$name] : '(absent)', 'ownership: ' . $name);
+			}
+
+			$response = mcm_http_post($server, '/guard_require_list_owner.php', array('movie_list_id' => 11), array('Cookie: PHPSESSID=' . $signed_in));
+			t_same(200, $response['status'], 'require_list_owner allows the owner');
+			t_same("reached list=11\n", $response['body'], 'require_list_owner hands back the validated identifier');
+
+			// Every way of not owning a list answers identically, so a response
+			// never says whether a list exists.
+			$denied = array(
+				"another user's list"    => array('session' => $signed_in, 'fields' => array('movie_list_id' => 12), 'logged' => 'not owned by user 7'),
+				'a list that does not exist' => array('session' => $signed_in, 'fields' => array('movie_list_id' => 99), 'logged' => 'not owned by user 7'),
+				'an identifier that is not a number' => array('session' => $signed_in, 'fields' => array('movie_list_id' => 'abc'), 'logged' => 'not a positive integer'),
+				'no identifier at all'   => array('session' => $signed_in, 'fields' => array(), 'logged' => 'not a positive integer'),
+				'a visitor who is not signed in' => array('session' => $signed_out, 'fields' => array('movie_list_id' => 11), 'logged' => 'no signed-in user'),
+				"the owner's list, asked for by somebody else" => array('session' => $other_user, 'fields' => array('movie_list_id' => 11), 'logged' => 'not owned by user 8'),
+			);
+			foreach ($denied as $description => $case) {
+				$response = mcm_http_post($server, '/guard_require_list_owner.php', $case['fields'], array('Cookie: PHPSESSID=' . $case['session']));
+
+				t_same(403, $response['status'], 'require_list_owner refuses ' . $description);
+				t_same($forbidden, $response['body'], 'require_list_owner answers ' . $description . ' with the same body as every other refusal');
+				t_lacks('reached', $response['body'], 'require_list_owner stops the page for ' . $description);
+				t_contains($case['logged'], $response['log'], 'the reason is logged for ' . $description);
+			}
+
+			// Both halves of what a refusal is for, on one request: the value
+			// that caused it is in the log, where somebody diagnosing this can
+			// read it, and it is not in the response, where the client could.
+			// A log that says only "an identifier was not a positive integer"
+			// cannot be used to find out what was sent, so the value itself is
+			// what is asserted here.
+			$response = mcm_http_post($server, '/guard_require_list_owner.php', array('movie_list_id' => $seed), array('Cookie: PHPSESSID=' . $signed_in));
+
+			t_same(403, $response['status'], 'a refused identifier gets the ordinary refusal');
+			t_contains($seed, $response['log'], 'the refused identifier itself reaches the log');
+			t_contains('not a positive integer', $response['log'], 'the log says why it was refused');
+			t_same($forbidden, $response['body'], 'the response is the same fixed body as every other refusal');
+			t_lacks($seed, $response['body'], 'the refused identifier never reaches the client');
+			// The body is not the only thing the client reads.
+			t_lacks($seed, mcm_header_text($response), 'the refused identifier never reaches the response headers');
+		}
+
+		/* The refusal itself: detail goes to the log, never to the client. */
+		$statuses = array(
+			400 => '{"error":"bad_request","message":"The request could not be processed."}',
+			401 => $unauthorised,
+			403 => $forbidden,
+			405 => $wrong_method,
+			599 => '{"error":"bad_request","message":"The request could not be processed."}',
+		);
+		foreach ($statuses as $status => $body) {
+			$response = mcm_http($server, '/guard_json_error.php?status=' . $status);
+
+			t_same($status === 599 ? 400 : $status, $response['status'], 'a refusal with status ' . $status);
+			t_same($body, $response['body'], 'the body of a refusal with status ' . $status);
+			t_lacks($seed, $response['body'], 'the private detail never reaches the client for status ' . $status);
+			t_lacks($seed, mcm_header_text($response), 'the private detail never reaches the headers for status ' . $status);
+			t_contains($seed, $response['log'], 'the private detail is logged for status ' . $status);
+			t_lacks('never reached', $response['body'], 'nothing after the refusal runs for status ' . $status);
+		}
+	} catch (Exception $exception) {
+		t_ok(false, 'the guard rejection cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 15. The guards are additive: constant-time, and nothing calls them yet
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('guards are additive', function () {
+	$guards = MCM_REPO_ROOT . '/inc/guards.php';
+
+	t_ok(file_exists($guards), 'the guards live in inc/guards.php');
+
+	// A constant-time comparison and an ordinary one behave identically, so no
+	// case that runs a request can tell them apart: this is the only thing that
+	// catches the comparison being swapped for ===. It reads the function's own
+	// tokens because a check over the whole file would be satisfied by a
+	// hash_equals() somewhere else, and it reads them in inc/security.php,
+	// which is where the shared comparison lives and where the bootstrap loads
+	// it from.
+	//
+	// Only the byte comparison is asserted. The length comparison in that
+	// function is deliberate - hash_equals() lets the length leak too - so the
+	// assertion is on what the function calls, not on it containing no
+	// comparison at all.
+	$security = MCM_REPO_ROOT . '/inc/security.php';
+	$body     = mcm_method_tokens($security, 'mcm_hash_equals');
+	t_ok(count($body) > 0, 'mcm_hash_equals() is declared');
+	t_same(1, mcm_count_calls_in($body, 'hash_equals'), 'the token comparison uses hash_equals()');
+	t_same(0, mcm_count_calls_in($body, 'strcmp'), 'the token comparison does not fall back to strcmp()');
+	t_same(0, mcm_count_calls_in($body, 'substr'), 'the token comparison does not compare a prefix');
+
+	// And the validity check has to route through it rather than comparing the
+	// session's token itself.
+	$body = mcm_method_tokens($guards, 'mcm_csrf_token_is_valid');
+	t_ok(count($body) > 0, 'mcm_csrf_token_is_valid() is declared');
+	t_same(1, mcm_count_calls_in($body, 'mcm_hash_equals'), 'the CSRF check compares through mcm_hash_equals()');
+	t_same(0, mcm_count_calls_in($body, 'hash_equals'), 'the CSRF check does not compare on its own');
+
+	// Nothing outside the test suite loads the guards yet. This issue adds them
+	// and leaves every request path exactly as it was; the issues that adopt
+	// them, endpoint by endpoint, are what change this assertion.
+	$callers = array();
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		if ($file === $guards) {
+			continue;
+		}
+		foreach (mcm_include_statements($file) as $statement) {
+			foreach ($statement['literals'] as $literal) {
+				if (substr($literal, -10) === 'guards.php') {
+					$callers[] = substr($file, strlen(MCM_REPO_ROOT) + 1);
+				}
+			}
+		}
+	}
+	t_same(array(), $callers, 'no entry point loads the guards yet, so no request path changed');
+
+	// The guards are a file of declarations: loading them has to be silent, and
+	// on its own must not produce a page.
+	$fixture  = mcm_fixture('guards-additive');
+	$server   = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/inc/guards.php');
+		t_same(200, $response['status'], 'the guards file is inert when it is loaded');
+		t_same('', $response['body'], 'the guards file produces no output of its own');
+		t_same('', $response['log'], 'the guards file logs nothing of its own');
+	} catch (Exception $exception) {
+		t_ok(false, 'the inert-guards case ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 16. Escaping what the server renders
  * ---------------------------------------------------------------------------
  */
 
@@ -1491,7 +1951,7 @@ t_group('output escaping', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 13. Bounded validation of a submitted list name
+ * 17. Bounded validation of a submitted list name
  * ---------------------------------------------------------------------------
  */
 

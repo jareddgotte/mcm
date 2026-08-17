@@ -440,9 +440,11 @@ function mcm_server_stop(array $server)
  *
  * @param string $method GET unless a case needs the request method itself to
  *                       matter, as the method-preserving redirect does
+ * @param string $body   the request body; a form-encoded content type is added
+ *                       unless $headers already set one
  * @return array status, headers, body, log
  */
-function mcm_http(array $server, $path, array $headers = array(), $method = 'GET')
+function mcm_http(array $server, $path, array $headers = array(), $method = 'GET', $body = '')
 {
 	file_put_contents($server['fixture']['log'], '');
 
@@ -457,9 +459,14 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 		'Connection: close',
 	);
 	if (strtoupper($method) !== 'GET' && strtoupper($method) !== 'HEAD') {
-		// A request with a method that may carry a body has to say it carries
-		// none, or the server waits for one.
-		$lines[] = 'Content-Length: 0';
+		// A request with a method that may carry a body has to say how long the
+		// body is - zero included, or the server waits for one.
+		$lines[] = 'Content-Length: ' . strlen($body);
+		// A body PHP is meant to parse into $_POST needs a content type too, and
+		// a case that sets its own keeps it.
+		if ($body !== '' && !mcm_has_header($headers, 'Content-Type')) {
+			$lines[] = 'Content-Type: application/x-www-form-urlencoded';
+		}
 	}
 	foreach ($headers as $header) {
 		if (stripos($header, 'host:') === 0) {
@@ -470,7 +477,7 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 	}
 
 	$request = strtoupper($method) . ' ' . $path . " HTTP/1.1\r\n" . implode("\r\n", $lines) . "\r\n";
-	fwrite($socket, $request . "\r\n");
+	fwrite($socket, $request . "\r\n" . $body);
 	$raw = '';
 	while (!feof($socket)) {
 		$chunk = fread($socket, 8192);
@@ -504,6 +511,38 @@ function mcm_http(array $server, $path, array $headers = array(), $method = 'GET
 		'body'    => substr($raw, $split + 4),
 		'log'     => file_get_contents($server['fixture']['log']),
 	);
+}
+
+/** Whether a request header line for this name was supplied by the case. */
+function mcm_has_header(array $headers, $name)
+{
+	foreach ($headers as $header) {
+		if (stripos($header, $name . ':') === 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Make one POST, with the fields form-encoded exactly as a browser or jQuery sends them. */
+function mcm_http_post(array $server, $path, array $fields = array(), array $headers = array())
+{
+	return mcm_http($server, $path, $headers, 'POST', http_build_query($fields));
+}
+
+/**
+ * Every response header as one "name: value" block.
+ *
+ * The body is not the only thing a client reads, so a case that asserts private
+ * detail did not reach the client has to look here too.
+ */
+function mcm_header_text(array $response)
+{
+	$text = '';
+	foreach ($response['headers'] as $header) {
+		$text .= $header[0] . ': ' . $header[1] . "\n";
+	}
+	return $text;
 }
 
 /** All values of one response header, in the order they arrived. */
