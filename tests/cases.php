@@ -375,7 +375,9 @@ t_group('error handling', function () {
 		t_same(mcm_generic_message(), $response['body'], 'a failure inside a call with secret arguments says nothing to the client');
 		t_contains('the database went away mid-login', $response['log'], 'the failure itself is logged');
 		t_contains('mcm_signs_someone_in', $response['log'], 'the trace still names the frame that failed');
-		t_lacks($seed, $response['log'], 'the arguments that frame was called with are not logged');
+		// PHP would have written the argument truncated to its first 15
+		// characters, so that prefix is what proves it is gone.
+		t_lacks(substr($seed, 0, 15), $response['log'], 'the arguments that frame was called with are not logged');
 
 		// ... and the scrubber that covers runtimes which cannot drop them.
 		$response = mcm_http($server, '/probe_scrub.php');
@@ -426,8 +428,11 @@ t_group('error handling', function () {
  */
 
 t_group('database failure', function () {
-	// Distinctive enough that finding it anywhere means it came from here.
-	$password = 'db-password-must-never-be-logged';
+	// Distinctive enough that finding it anywhere means it came from here, and
+	// short on purpose: PHP truncates a string argument in a stack trace at 15
+	// characters, so a long password would go missing from a trace that did in
+	// fact leak it and the assertions below would pass for the wrong reason.
+	$password = 'pw-never-log-1';
 
 	// Port 1 is privileged, so nothing in this suite can be listening on it and
 	// the connection is refused immediately. DB_HOST reaches the DSN verbatim,
@@ -502,6 +507,37 @@ t_group('database failure', function () {
 		t_contains('rename_list', $response['log'], 'a real page during an outage: the log names the page');
 		t_contains('SQLSTATE[HY000] [2002]', $response['log'], 'a real page during an outage: the cause is logged');
 		t_lacks('Call to a member function', $response['log'], 'a real page during an outage: no knock-on failure');
+
+		// 5. A statement that fails once it is running - the other half of the
+		// helper, and the half the old code turned into "Execute error: ..." on
+		// the page. Driver-independent, so SQLite stands in for the real server.
+		if (!extension_loaded('pdo_sqlite')) {
+			t_skip('a failing query', 'this PHP has no pdo_sqlite to stand in for the database');
+		} else {
+			// A statement that works is left alone: the helper reports success,
+			// the row lands, and the page finishes.
+			$response = mcm_http($server, '/probe_db_query.php?mode=ok');
+			t_same(200, $response['status'], 'a query that works still renders');
+			t_contains('result=true', $response['body'], 'a query that works reports success');
+			t_contains('rows=2', $response['body'], 'a query that works still writes its row');
+			t_contains('the page carried on', $response['body'], 'a query that works does not stop the page');
+			t_same('', $response['log'], 'a query that works logs nothing');
+
+			foreach (array('exceptions' => '', 'a silent driver' => '?mode=silent') as $mode => $query) {
+				$response = mcm_http($server, '/probe_db_query.php' . $query);
+
+				t_same(500, $response['status'], 'a failing query with ' . $mode . ': the response says the request failed');
+				t_same(mcm_generic_message(), $response['body'], 'a failing query with ' . $mode . ': the client gets the generic message and nothing else');
+				t_lacks('the page carried on', $response['body'], 'a failing query with ' . $mode . ': the request stops there');
+				t_lacks('UNIQUE constraint', $response['body'], 'a failing query with ' . $mode . ': no driver message reaches the client');
+				t_lacks('INSERT INTO', $response['body'], 'a failing query with ' . $mode . ': no query text reaches the client');
+
+				t_contains('Database error', $response['log'], 'a failing query with ' . $mode . ': the log classifies the failure');
+				t_contains('name that is already taken', $response['log'], 'a failing query with ' . $mode . ': the log names what the query was for');
+				t_contains('UNIQUE constraint failed', $response['log'], 'a failing query with ' . $mode . ": the log keeps the driver's own message");
+				t_contains('[query: INSERT INTO mcm_probe', $response['log'], 'a failing query with ' . $mode . ': the log keeps the statement');
+			}
+		}
 
 		// A page that never reaches the database is unaffected by the outage.
 		$response = mcm_http($server, '/rename_list.php');

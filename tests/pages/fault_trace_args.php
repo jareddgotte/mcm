@@ -11,4 +11,7 @@ function mcm_signs_someone_in($user_name, $user_password)
 	throw new RuntimeException('the database went away mid-login');
 }
 
-mcm_signs_someone_in('someone', 'password-' . MCM_TEST_SEED);
+// The seed goes in on its own rather than behind a prefix: PHP truncates a
+// string argument in a trace at 15 characters, and a prefix would push the part
+// the case looks for past the cut, so a trace that did leak it would still pass.
+mcm_signs_someone_in('someone', MCM_TEST_SEED);
