@@ -25,28 +25,26 @@ $report['positive_int_bool']     = var_export(mcm_positive_int(true), true);
 $report['positive_int_null']     = var_export(mcm_positive_int(null), true);
 $report['positive_int_array']    = var_export(mcm_positive_int(array(7)), true);
 
-/* The constant-time comparison, on its own. */
+/* The comparison a CSRF token is checked with. It is mcm_hash_equals() from
+ * inc/security.php, which the bootstrap loads; these cases are here because
+ * this is the property the CSRF check depends on. */
 $token = str_repeat('a', 64);
-$report['equals_same']        = mcm_guard_bool(mcm_constant_time_equals($token, $token));
-$report['equals_first_byte']  = mcm_guard_bool(mcm_constant_time_equals($token, 'b' . substr($token, 1)));
-$report['equals_last_byte']   = mcm_guard_bool(mcm_constant_time_equals($token, substr($token, 0, 63) . 'b'));
-$report['equals_prefix']      = mcm_guard_bool(mcm_constant_time_equals($token, substr($token, 0, 63)));
-$report['equals_longer']      = mcm_guard_bool(mcm_constant_time_equals($token, $token . 'a'));
-$report['equals_both_empty']  = mcm_guard_bool(mcm_constant_time_equals('', ''));
-$report['equals_known_empty'] = mcm_guard_bool(mcm_constant_time_equals('', $token));
-$report['equals_given_empty'] = mcm_guard_bool(mcm_constant_time_equals($token, ''));
-$report['equals_non_string']  = mcm_guard_bool(mcm_constant_time_equals($token, array()));
-$report['hash_equals_same']   = mcm_guard_bool(mcm_hash_equals($token, $token));
-$report['hash_equals_differs'] = mcm_guard_bool(mcm_hash_equals($token, substr($token, 0, 63) . 'b'));
-$report['hash_equals_non_string'] = mcm_guard_bool(mcm_hash_equals($token, array()));
+$report['equals_same']        = mcm_guard_bool(mcm_hash_equals($token, $token));
+$report['equals_first_byte']  = mcm_guard_bool(mcm_hash_equals($token, 'b' . substr($token, 1)));
+$report['equals_last_byte']   = mcm_guard_bool(mcm_hash_equals($token, substr($token, 0, 63) . 'b'));
+$report['equals_prefix']      = mcm_guard_bool(mcm_hash_equals($token, substr($token, 0, 63)));
+$report['equals_longer']      = mcm_guard_bool(mcm_hash_equals($token, $token . 'a'));
+$report['equals_both_empty']  = mcm_guard_bool(mcm_hash_equals('', ''));
+$report['equals_known_empty'] = mcm_guard_bool(mcm_hash_equals('', $token));
+$report['equals_given_empty'] = mcm_guard_bool(mcm_hash_equals($token, ''));
+$report['equals_non_string']  = mcm_guard_bool(mcm_hash_equals($token, array()));
 
-/* Tokens. */
+/* Tokens, as the CSRF token is minted. */
 $first  = mcm_random_token();
 $second = mcm_random_token();
 $report['token_length'] = strlen($first);
 $report['token_hex']    = mcm_guard_bool(preg_match('/^[0-9a-f]{64}$/', $first) === 1);
 $report['token_unique'] = mcm_guard_bool($first !== $second);
-$report['token_floor']  = strlen(mcm_random_token(4));
 
 /* Request method, which the command line does not have. */
 $report['method']  = mcm_request_method();

@@ -31,8 +31,11 @@
  */
 
 // The session, the configuration and the error handling all come from the
-// shared bootstrap. Requiring it here is a no-op for an entry point that has
-// already loaded it, and keeps this file usable on its own.
+// shared bootstrap, and so do the security primitives this file leans on:
+// mcm_random_token() mints the CSRF token and mcm_hash_equals() is the
+// constant-time comparison it is checked with, both from inc/security.php.
+// Requiring the bootstrap here is a no-op for an entry point that has already
+// loaded it, and keeps this file usable on its own.
 require_once(dirname(__FILE__) . '/bootstrap.php');
 
 /** Where the session keeps the CSRF token. Login::logout() empties $_SESSION, so signing out drops it. */
@@ -200,45 +203,6 @@ function mcm_request_is_post()
  */
 
 /**
- * A random hex token.
- *
- * Prefers the runtime's cryptographic source and falls back only where there is
- * none, because the site's own PHP version is not something this repository can
- * assume (see the version branch at the top of inc/php-login.php).
- *
- * @param int $bytes number of random bytes; the token is twice as many hex characters
- * @return string
- */
-function mcm_random_token($bytes = 32)
-{
-	$bytes = (int) $bytes;
-	if ($bytes < 16) {
-		$bytes = 16;
-	}
-
-	if (function_exists('random_bytes')) {
-		return bin2hex(random_bytes($bytes));
-	}
-
-	if (function_exists('openssl_random_pseudo_bytes')) {
-		$strong = false;
-		$raw    = openssl_random_pseudo_bytes($bytes, $strong);
-		if ($raw !== false && $strong) {
-			return bin2hex($raw);
-		}
-	}
-
-	// Last resort, for a runtime with neither: not a cryptographic source, but
-	// still unpredictable enough to be worth more than no token at all.
-	$token = '';
-	while (strlen($token) < $bytes * 2) {
-		$token .= hash('sha256', uniqid((string) mt_rand(), true));
-	}
-
-	return substr($token, 0, $bytes * 2);
-}
-
-/**
  * The session's CSRF token, minted on first use.
  *
  * The token lasts as long as the session: it is not rotated per request, so a
@@ -280,7 +244,9 @@ function mcm_submitted_csrf_token()
  *
  * A session with no token of its own matches nothing, so this can never be
  * satisfied by submitting an empty token. The token is only read here, never
- * minted: an unauthenticated rejection leaves no state behind.
+ * minted: an unauthenticated rejection leaves no state behind. The comparison
+ * itself is mcm_hash_equals(), which is constant-time, so a rejected request
+ * never reveals how much of a guessed token was right.
  *
  * @param mixed $token
  * @return bool
@@ -298,69 +264,6 @@ function mcm_csrf_token_is_valid($token)
 	}
 
 	return mcm_hash_equals($_SESSION[MCM_CSRF_SESSION_KEY], $token);
-}
-
-/**
- * Constant-time string comparison.
- *
- * This is the only place a token is compared. It contains no comparison of its
- * own on purpose: a comparison that returns as soon as two bytes differ tells
- * an attacker, through how long it took, how much of a guess was right.
- *
- * @param string $known the value the server holds
- * @param string $given the value the client submitted
- * @return bool
- */
-function mcm_hash_equals($known, $given)
-{
-	// Anything that is not a string is not the token. Checking here rather than
-	// letting hash_equals() raise a TypeError keeps a caller that forwards
-	// whatever the request contained on the refusing path, where it belongs.
-	if (!is_string($known) || !is_string($given)) {
-		return false;
-	}
-
-	if (function_exists('hash_equals')) {
-		return hash_equals($known, $given);
-	}
-
-	return mcm_constant_time_equals($known, $given);
-}
-
-/**
- * The constant-time comparison used where the runtime has no hash_equals()
- * (PHP before 5.6).
- *
- * The length of the submitted value is not a secret and is allowed to decide
- * early; the bytes are, so every one of them is folded into the same
- * accumulator and the answer is only read at the end.
- *
- * @param string $known
- * @param string $given
- * @return bool
- */
-function mcm_constant_time_equals($known, $given)
-{
-	if (!is_string($known) || !is_string($given)) {
-		return false;
-	}
-
-	$known_length = strlen($known);
-	$given_length = strlen($given);
-
-	if ($known_length === 0 || $given_length === 0) {
-		return $known_length === $given_length;
-	}
-
-	$difference = $known_length ^ $given_length;
-	for ($index = 0; $index < $given_length; $index++) {
-		// Reading the known value round-robin keeps the work proportional to
-		// what was submitted rather than to where the first difference is; a
-		// length mismatch has already made $difference non-zero.
-		$difference |= ord($known[$index % $known_length]) ^ ord($given[$index]);
-	}
-
-	return $difference === 0;
 }
 
 /*

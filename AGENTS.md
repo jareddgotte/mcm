@@ -92,8 +92,10 @@ the application. Setup is documented in `README.md`.
   a change to any of that has one place to happen in.
 - `inc/guards.php` holds the reusable request guards - signed-in checks, current
   user, POST-only, CSRF, movie-list ownership and the fixed JSON refusal bodies.
-  It is declarations only, and nothing loads it yet: an endpoint adopts it
-  deliberately. `php tests/run.php` asserts that no source outside `tests/`
+  Its CSRF token comes from `mcm_random_token()` and is checked with
+  `mcm_hash_equals()`, both from `inc/security.php`; the guards declare no
+  primitives of their own. It is declarations only, and nothing loads it yet: an
+  endpoint adopts it deliberately. `php tests/run.php` asserts that no source outside `tests/`
   includes it, so the first endpoint to adopt a guard also updates that
   assertion in `tests/cases.php`.
 - A refusal answers with a status from `mcm_json_error_catalogue()` and that

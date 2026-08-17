@@ -289,20 +289,6 @@ function mcm_count_debug_output($file)
 	return $count;
 }
 
-/** Whether a body's tokens contain any of the given token ids or texts. */
-function mcm_body_contains(array $tokens, array $ids, array $texts = array())
-{
-	foreach ($tokens as $token) {
-		if ($token['id'] !== null && in_array($token['id'], $ids, true)) {
-			return true;
-		}
-		if (in_array($token['text'], $texts, true)) {
-			return true;
-		}
-	}
-	return false;
-}
-
 /** Every PHP file in the project, excluding this test suite. */
 function mcm_php_sources($root)
 {

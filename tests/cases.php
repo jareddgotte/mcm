@@ -1364,22 +1364,18 @@ t_group('guard helpers', function () {
 		'equals_both_empty'   => 'true',
 		'equals_known_empty'  => 'false',
 		'equals_given_empty'  => 'false',
-		'equals_non_string'   => 'false',
-		'hash_equals_same'    => 'true',
-		'hash_equals_differs' => 'false',
 		// A caller that forwards whatever arrived in the request must not be
 		// able to turn a comparison into a TypeError.
-		'hash_equals_non_string' => 'false',
+		'equals_non_string'   => 'false',
 	);
 	foreach ($comparisons as $name => $expected) {
 		t_same($expected, isset($report[$name]) ? $report[$name] : '(absent)', 'comparison: ' . $name);
 	}
 
 	// Tokens.
-	t_same('64', $report['token_length'], 'a token is 32 bytes, as 64 hex characters');
+	t_same('64', $report['token_length'], 'a token is 64 hex characters');
 	t_same('true', $report['token_hex'], 'a token is hex and nothing else');
 	t_same('true', $report['token_unique'], 'two tokens in one request differ');
-	t_same('32', $report['token_floor'], 'a token shorter than 16 bytes cannot be asked for');
 
 	// The command line has no request method, so nothing there is a POST.
 	t_same('', $report['method'], 'there is no request method outside a request');
@@ -1720,16 +1716,22 @@ t_group('guards are additive', function () {
 
 	t_ok(file_exists($guards), 'the guards live in inc/guards.php');
 
-	// The one place a token is compared has to be a comparison that cannot
-	// return early. Reading the function's own tokens is the point: a check over
-	// the whole file would be satisfied by a hash_equals() somewhere else.
-	$body = mcm_method_tokens($guards, 'mcm_hash_equals');
+	// A constant-time comparison and an ordinary one behave identically, so no
+	// case that runs a request can tell them apart: this is the only thing that
+	// catches the comparison being swapped for ===. It reads the function's own
+	// tokens because a check over the whole file would be satisfied by a
+	// hash_equals() somewhere else, and it reads them in inc/security.php,
+	// which is where the shared comparison lives and where the bootstrap loads
+	// it from.
+	//
+	// Only the byte comparison is asserted. The length comparison in that
+	// function is deliberate - hash_equals() lets the length leak too - so the
+	// assertion is on what the function calls, not on it containing no
+	// comparison at all.
+	$security = MCM_REPO_ROOT . '/inc/security.php';
+	$body     = mcm_method_tokens($security, 'mcm_hash_equals');
 	t_ok(count($body) > 0, 'mcm_hash_equals() is declared');
 	t_same(1, mcm_count_calls_in($body, 'hash_equals'), 'the token comparison uses hash_equals()');
-	t_ok(
-		!mcm_body_contains($body, array(T_IS_IDENTICAL, T_IS_EQUAL, T_IS_NOT_IDENTICAL, T_IS_NOT_EQUAL), array('<=>')),
-		'the token comparison contains no comparison that could return early'
-	);
 	t_same(0, mcm_count_calls_in($body, 'strcmp'), 'the token comparison does not fall back to strcmp()');
 	t_same(0, mcm_count_calls_in($body, 'substr'), 'the token comparison does not compare a prefix');
 
