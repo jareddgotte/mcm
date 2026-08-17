@@ -47,8 +47,85 @@ function mcm_flat_source($file)
  */
 function mcm_count_calls($file, $function)
 {
+	return mcm_count_calls_in(mcm_tokens($file), $function);
+}
+
+/**
+ * The body of one function or method, as tokens.
+ *
+ * A fact about one authentication transition has to be read from that
+ * transition's own code: a check that scans the whole file would accept a call
+ * that sits in some other method entirely. Returns an empty array when the file
+ * declares no such function.
+ */
+function mcm_method_tokens($file, $method)
+{
 	$tokens = mcm_tokens($file);
-	$count  = 0;
+	$total  = count($tokens);
+
+	foreach ($tokens as $index => $token) {
+		if ($token['id'] !== T_FUNCTION) {
+			continue;
+		}
+		if (!isset($tokens[$index + 1]) || $tokens[$index + 1]['id'] !== T_STRING
+			|| strcasecmp($tokens[$index + 1]['text'], $method) !== 0) {
+			continue;
+		}
+
+		// Walk past the parameter list: the body starts at the first "{" that is
+		// not inside parentheses, which a default parameter value could be.
+		$parentheses = 0;
+		$body        = array();
+		$depth       = 0;
+		$started     = false;
+
+		for ($cursor = $index + 2; $cursor < $total; $cursor++) {
+			$text = $tokens[$cursor]['text'];
+			$id   = $tokens[$cursor]['id'];
+
+			if (!$started) {
+				if ($text === '(') {
+					$parentheses++;
+				} elseif ($text === ')') {
+					$parentheses--;
+				} elseif ($text === '{' && $parentheses === 0) {
+					$started = true;
+					$depth   = 1;
+				} elseif ($text === ';' && $parentheses === 0) {
+					// An abstract or interface declaration has no body at all.
+					return array();
+				}
+				continue;
+			}
+
+			// T_CURLY_OPEN and T_DOLLAR_OPEN_CURLY_BRACES are the "{" of a string
+			// interpolation; their closing "}" is an ordinary token, so they have
+			// to be counted or the braces stop balancing.
+			if ($text === '{' || $id === T_CURLY_OPEN || $id === T_DOLLAR_OPEN_CURLY_BRACES) {
+				$depth++;
+			} elseif ($text === '}') {
+				$depth--;
+				if ($depth === 0) {
+					return $body;
+				}
+			}
+			$body[] = $tokens[$cursor];
+		}
+	}
+
+	return array();
+}
+
+/** Count calls to a named function inside one function or method only. */
+function mcm_method_calls($file, $method, $function)
+{
+	return mcm_count_calls_in(mcm_method_tokens($file, $method), $function);
+}
+
+/** Count calls to a named function in an already tokenized slice of source. */
+function mcm_count_calls_in(array $tokens, $function)
+{
+	$count = 0;
 
 	foreach ($tokens as $index => $token) {
 		if ($token['id'] !== T_STRING || strcasecmp($token['text'], $function) !== 0) {

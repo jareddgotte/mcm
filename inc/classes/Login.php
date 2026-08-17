@@ -192,10 +192,16 @@ class Login
     private function loginWithCookieData()
     {
         if (isset($_COOKIE['rememberme'])) {
-            // extract data from the cookie
-            list ($user_id, $token, $hash) = explode(':', $_COOKIE['rememberme']);
-            // check cookie hash validity
-            if ($hash == hash('sha256', $user_id . ':' . $token . COOKIE_SECRET_KEY) && !empty($token)) {
+            // read the cookie and check its hash. The format is unchanged, so a
+            // cookie issued by any earlier version of this file is still valid
+            // here, and the check no longer says how much of a guessed hash was
+            // right.
+            $cookie_parts = mcm_remember_me_cookie_parts($_COOKIE['rememberme']);
+
+            if ($cookie_parts !== false) {
+                $user_id = $cookie_parts['user_id'];
+                $token   = $cookie_parts['token'];
+
                 // cookie looks good, try to select corresponding user
                 if ($this->databaseConnection()) {
                     // get real token from database (and all other data)
@@ -219,6 +225,11 @@ class Login
                         $this->user_name = $result_row->user_name;
                         $this->user_email = $result_row->user_email;
                         $this->user_is_logged_in = true;
+
+                        // The visitor is authenticated now, so the identifier
+                        // this session carries must not be one that was already
+                        // in the browser beforehand.
+                        mcm_session_regenerate_id();
 
                         // Cookie token usable only once
                         $this->newRememberMeCookie();
@@ -267,8 +278,9 @@ class Login
             // if this user not exists
             if (! isset($result_row->user_id)) {
                 $this->errors[] = $this->lang['User not exist'];
-            // using PHP 5.5's password_verify() function to check if the provided passwords fits to the hash of that user's password
-            } else if (! password_verify($user_password, $result_row->user_password_hash)) {
+            // check the provided password against the stored hash. Hashes written
+            // by any earlier version of this file still verify here.
+            } else if (! mcm_password_verify($user_password, $result_row->user_password_hash)) {
                 $this->errors[] = $this->lang['Wrong password'];
             // does the user activates his account with the verification email
             } else if ($result_row->user_active != 1) {
@@ -287,6 +299,11 @@ class Login
                 $this->user_email = $result_row->user_email;
                 $this->user_is_logged_in = true;
 
+                // The visitor is authenticated now, so the identifier this
+                // session carries must not be one that was already in the
+                // browser beforehand.
+                mcm_session_regenerate_id();
+
                 // if user has check the "remember me" checkbox, then generate token and write cookie
                 if (isset($user_rememberme)) {
                     $this->newRememberMeCookie();
@@ -295,28 +312,24 @@ class Login
                     $this->deleteRememberMeCookie();
                 }
 
-                // OPTIONAL: recalculate the user's password hash
-                // DELETE this if-block if you like, it only exists to recalculate users's hashes when you provide a cost factor,
-                // by default the script will use a cost factor of 10 and never change it.
-                // check if the have defined a cost factor in config/hashing.php
-                if (defined('HASH_COST_FACTOR')) {
-                    // check if the hash needs to be rehashed
-                    if (password_needs_rehash($result_row->user_password_hash, PASSWORD_DEFAULT, array('cost' => HASH_COST_FACTOR))) {
+                // Opportunistic rehashing: this is the only moment the plain
+                // password is available, so a hash that was calculated with
+                // weaker settings than the ones in use now is quietly replaced.
+                // Nobody is asked to do anything, and an account whose owner
+                // never signs in keeps its old hash and keeps working.
+                if (mcm_password_needs_rehash($result_row->user_password_hash)) {
+                    $user_password_hash = mcm_password_hash($user_password);
 
-                        // calculate new hash with new cost factor
-                        $user_password_hash = password_hash($user_password, PASSWORD_DEFAULT, array('cost' => HASH_COST_FACTOR));
+                    // TODO: this should be put into another method !?
+                    $query_update = $this->db_connection->prepare('UPDATE users SET user_password_hash = :user_password_hash WHERE user_id = :user_id');
+                    $query_update->bindValue(':user_password_hash', $user_password_hash, PDO::PARAM_STR);
+                    $query_update->bindValue(':user_id', $result_row->user_id, PDO::PARAM_INT);
+                    $query_update->execute();
 
-                        // TODO: this should be put into another method !?
-                        $query_update = $this->db_connection->prepare('UPDATE users SET user_password_hash = :user_password_hash WHERE user_id = :user_id');
-                        $query_update->bindValue(':user_password_hash', $user_password_hash, PDO::PARAM_STR);
-                        $query_update->bindValue(':user_id', $result_row->user_id, PDO::PARAM_INT);
-                        $query_update->execute();
-
-                        if ($query_update->rowCount() == 0) {
-                            // writing new hash was successful. you should now output this to the user ;)
-                        } else {
-                            // writing new hash was NOT successful. you should now output this to the user ;)
-                        }
+                    if ($query_update->rowCount() != 1) {
+                        // The login itself has already succeeded, so this is a
+                        // note for the log and nothing the visitor is told.
+                        mcm_log('Password rehash', 'the recalculated hash could not be stored for user id ' . (int) $result_row->user_id);
                     }
                 }
             }
@@ -330,15 +343,15 @@ class Login
     {
         // if database connection opened
         if ($this->databaseConnection()) {
-            // generate 64 char random string and store it in current user data
-            $random_token_string = hash('sha256', mt_rand());
+            // generate a 64 char random string and store it in current user data.
+            // 64 characters is the width of users.user_rememberme_token, so the
+            // cookie and the column keep the shape they have always had.
+            $random_token_string = mcm_random_token(64);
             $sth = $this->db_connection->prepare("UPDATE users SET user_rememberme_token = :user_rememberme_token WHERE user_id = :user_id");
             $sth->execute(array(':user_rememberme_token' => $random_token_string, ':user_id' => $_SESSION['user_id']));
 
             // generate cookie string that consists of userid, randomstring and combined hash of both
-            $cookie_string_first_part = $_SESSION['user_id'] . ':' . $random_token_string;
-            $cookie_string_hash = hash('sha256', $cookie_string_first_part . COOKIE_SECRET_KEY);
-            $cookie_string = $cookie_string_first_part . ':' . $cookie_string_hash;
+            $cookie_string = mcm_remember_me_cookie_value($_SESSION['user_id'], $random_token_string);
 
             // set cookie
             setcookie('rememberme', $cookie_string, time() + COOKIE_RUNTIME, "/", COOKIE_DOMAIN);
@@ -489,18 +502,12 @@ class Login
             // if this user exists
             if (isset($result_row->user_password_hash)) {
 
-                // using PHP 5.5's password_verify() function to check if the provided passwords fits to the hash of that user's password
-                if (password_verify($user_password_old, $result_row->user_password_hash)) {
+                // check the old password against the stored hash, which may have
+                // been written by any earlier version of this file
+                if (mcm_password_verify($user_password_old, $result_row->user_password_hash)) {
 
-                    // now it gets a little bit crazy: check if we have a constant HASH_COST_FACTOR defined (in config/hashing.php),
-                    // if so: put the value into $hash_cost_factor, if not, make $hash_cost_factor = null
-                    $hash_cost_factor = (defined('HASH_COST_FACTOR') ? HASH_COST_FACTOR : null);
-
-                    // crypt the user's password with the PHP 5.5's password_hash() function, results in a 60 character hash string
-                    // the PASSWORD_DEFAULT constant is defined by the PHP 5.5, or if you are using PHP 5.3/5.4, by the password hashing
-                    // compatibility library. the third parameter looks a little bit shitty, but that's how those PHP 5.5 functions
-                    // want the parameter: as an array with, currently only used with 'cost' => XX.
-                    $user_password_hash = password_hash($user_password_new, PASSWORD_DEFAULT, array('cost' => $hash_cost_factor));
+                    // hash the new password with the configured cost factor
+                    $user_password_hash = mcm_password_hash($user_password_new);
 
                     // write users new hash into database
                     $query_update = $this->db_connection->prepare('UPDATE users SET user_password_hash = :user_password_hash WHERE user_id = :user_id');
@@ -510,6 +517,10 @@ class Login
 
                     // check if exactly one row was successfully changed:
                     if ($query_update->rowCount()) {
+                        // The password just changed, so the session gets a new
+                        // identifier: any copy of the old one stops working.
+                        mcm_session_regenerate_id();
+
                         $this->messages[] = $this->lang['Password changed'];
                     } else {
                         $this->errors[] = $this->lang['Password changed failed'];
@@ -538,8 +549,10 @@ class Login
             // generate timestamp (to see when exactly the user (or an attacker) requested the password reset mail)
             // btw this is an integer ;)
             $temporary_timestamp = time();
-            // generate random hash for email password reset verification (40 char string)
-            $user_password_reset_hash = sha1(uniqid(mt_rand(), true));
+            // generate a random token for email password reset verification.
+            // 40 characters is the width of users.user_password_reset_hash, the
+            // same length the previous sha1() value had.
+            $user_password_reset_hash = mcm_random_token(40);
             // database query, getting all the info of the selected user
             $result_row = $this->getUserData($user_name);
 
@@ -630,8 +643,11 @@ class Login
             // database query, getting all the info of the selected user
             $result_row = $this->getUserData($user_name);
 
-            // if this user exists and have the same hash in database
-            if (isset($result_row->user_id) && $result_row->user_password_reset_hash == $verification_code) {
+            // if this user exists and have the same hash in database. The
+            // comparison is constant-time, so it says nothing about how much of
+            // a guessed code was correct.
+            if (isset($result_row->user_id)
+                && mcm_hash_equals((string) $result_row->user_password_reset_hash, (string) $verification_code)) {
 
                 $timestamp_one_hour_ago = time() - 3600; // 3600 seconds are 1 hour
 
@@ -665,15 +681,8 @@ class Login
             $this->errors[] = $this->lang['Password too short'];
         // if database connection opened
         } else if ($this->databaseConnection()) {
-            // now it gets a little bit crazy: check if we have a constant HASH_COST_FACTOR defined (in config/hashing.php),
-            // if so: put the value into $hash_cost_factor, if not, make $hash_cost_factor = null
-            $hash_cost_factor = (defined('HASH_COST_FACTOR') ? HASH_COST_FACTOR : null);
-
-            // crypt the user's password with the PHP 5.5's password_hash() function, results in a 60 character hash string
-            // the PASSWORD_DEFAULT constant is defined by the PHP 5.5, or if you are using PHP 5.3/5.4, by the password hashing
-            // compatibility library. the third parameter looks a little bit shitty, but that's how those PHP 5.5 functions
-            // want the parameter: as an array with, currently only used with 'cost' => XX.
-            $user_password_hash = password_hash($user_password_new, PASSWORD_DEFAULT, array('cost' => $hash_cost_factor));
+            // hash the new password with the configured cost factor
+            $user_password_hash = mcm_password_hash($user_password_new);
 
             // write users new hash into database
             $query_update = $this->db_connection->prepare('UPDATE users SET user_password_hash = :user_password_hash,
@@ -686,6 +695,10 @@ class Login
 
             // check if exactly one row was successfully changed:
             if ($query_update->rowCount() == 1) {
+                // The password just changed, so whatever identifier this
+                // browser arrived with does not survive the change either.
+                mcm_session_regenerate_id();
+
                 $this->password_reset_was_successful = true;
                 $this->messages[] = $this->lang['Password changed'];
             } else {
