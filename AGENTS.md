@@ -44,6 +44,10 @@ the application. Setup is documented in `README.md`.
   8.1, 8.3 and 8.4 and fails exactly this one assertion on 8.5; that failure is
   the site's, not the harness's, and the assertion stays as it is until the
   captcha is fixed.
+- A database outage is simulated without a database: the fixture's `DB_HOST`
+  reaches the DSN verbatim, so `127.0.0.1;port=1` pins a port nothing can be
+  listening on and the driver refuses the connection exactly as it would during
+  a real outage.
 - When changing the harness, re-run the mutation sweep rather than trusting a
   green run: an assertion that cannot fail still passes.
 
@@ -51,9 +55,9 @@ the application. Setup is documented in `README.md`.
 
 - `inc/bootstrap.php` is the shared bootstrap. Every public entry point includes
   it first and exactly once, and it is the single place that loads
-  configuration, installs the error/exception/shutdown handlers, and calls
-  `session_start()`. Add new cross-cutting request setup there, not in an entry
-  point.
+  configuration, installs the error/exception/shutdown handlers, calls
+  `session_start()`, and opens database connections. Add new cross-cutting
+  request setup there, not in an entry point.
 - Public entry points are every `*.php` in the document root plus
   `inc/showCaptcha.php`, which the browser requests directly for the
   registration captcha. A new entry point must include the bootstrap.
@@ -61,6 +65,16 @@ the application. Setup is documented in `README.md`.
   load the bootstrap first. Both are asserted by `php tests/run.php`.
 - The session cookie name stays at the server default. Renaming it would sign
   out every visitor of the live site.
+- Redirects go through `mcm_redirect()` / `mcm_redirect_target()` in the
+  bootstrap. Never build a destination from `HTTP_HOST`, `SERVER_NAME` or
+  `PHP_SELF`: the host comes from `MCM_CANONICAL_HOST` or is left out
+  altogether, and the path from `SCRIPT_NAME`. `php tests/run.php` asserts that
+  no `header()` call in the project's own code reads the request host.
+- HTTPS enforcement lives in the bootstrap, ahead of `session_start()` so no
+  cookie goes out over plain HTTP, and is temporary (302/307) on purpose:
+  `define('MCM_FORCE_HTTPS', false)` has to be able to take it back. Strict
+  transport security is deliberately absent for the same reason and the suite
+  asserts it stays absent.
 - Configuration is layered: `inc/config/config.php` (untracked, real values)
   wins, and the bootstrap fills in safe defaults for anything it omits.
   `inc/config/example_config.php` is tracked and must only ever hold
@@ -69,6 +83,20 @@ the application. Setup is documented in `README.md`.
   constant-time comparison, password hashing and session identifier renewal
   live. Login and Registration call it rather than PHP's functions directly, so
   a change to any of that has one place to happen in.
+
+## Database access
+
+- Reach the database only through the bootstrap: `mcm_db_or_fail()` for a page
+  that cannot be served without it, `mcm_db_connect()` when the caller shows its
+  own message instead (the `Login` and `Registration` classes), and
+  `mcm_db_execute()` to run a prepared statement. `new PDO` and reads of
+  `DB_PASS` are confined to `inc/bootstrap.php`, and `php tests/run.php` asserts
+  it, as it asserts that no application code calls `var_dump()` and friends.
+- Never log the stack trace of a failed connection attempt. PHP records call
+  arguments in a trace, and the arguments there are the DSN, the user and the
+  password - on PHP 8.1 the password appears in full, and only PHP 8.3 masks it.
+  `mcm_db_connect()` logs the driver's message alone for that reason, and
+  `mcm_scrub_trace()` strips quoted arguments from every other trace.
 
 ## Sharp edges
 

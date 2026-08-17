@@ -131,6 +131,10 @@ class Login
     /**
      * Checks if database connection is opened.
      * If not, then tries to open it.
+     *
+     * The connection comes from the shared bootstrap, which logs why it failed.
+     * The visitor is told only that there is a database problem: the driver's
+     * message described the server, not anything they can act on.
      */
     private function databaseConnection()
     {
@@ -138,13 +142,12 @@ class Login
         if ($this->db_connection != null) {
             return true;
         } else {
-            try {
-                $this->db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
-                return true;
-            } catch (PDOException $e) {
-                $this->errors[] = $this->lang['Database error'] . $e->getMessage();
+            $this->db_connection = mcm_db_connect('login');
+            if ($this->db_connection === null) {
+                $this->errors[] = $this->lang['Database error'];
                 return false;
             }
+            return true;
         }
     }
 

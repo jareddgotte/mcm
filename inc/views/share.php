@@ -15,19 +15,11 @@ $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];
 
 // Create our list arrays to pass onto the TMDbDisplay class
-try {
-	$db_connection = new PDO('mysql:host='. DB_HOST .';dbname='. DB_NAME, DB_USER, DB_PASS);
-} catch (PDOException $e) {
-	$db_connection = false;
-	$errors[] = 'Database error' . $e->getMessage();
-}
+$db_connection = mcm_db_or_fail('share');
 
 $query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
 $query->bindValue(':user_id', $user_id, PDO::PARAM_INT);
-if ($query->execute() === FALSE) {
-	$errorInfo = $query->errorInfo();
-	$errors[] = 'Execute error: ' . $errorInfo[2];
-}
+mcm_db_execute($query, "share: listing the user's lists");
 
 $movie_lists = array();
 while ($row = $query->fetch(PDO::FETCH_OBJ)) {
@@ -42,10 +34,7 @@ $db_var = array();
 foreach ($movie_lists as $v) {
 	$query = $db_connection->prepare('SELECT b.tmdb_movie_id AS movie_id, b.tmdb_title AS title, b.tmdb_original_title AS original_title, b.tmdb_poster_path AS poster_path, b.tmdb_release_date AS release_date FROM movies a JOIN master_movie_list b ON a.tmdb_movie_id = b.tmdb_movie_id WHERE movie_list_id = :movie_list_id');
 	$query->bindValue(':movie_list_id', $v[0], PDO::PARAM_INT);
-	if ($query->execute() === FALSE) {
-		$errorInfo = $query->errorInfo();
-		$errors[] = 'Execute error: ' . $errorInfo[2];
-	}
+	mcm_db_execute($query, 'share: listing the movies in a list');
 	$db_var[] = array('list_id' => $v[0], 'list_name' => $v[1], 'list_description' => $v[2], 'display_log' => 0, 'movie_details' => $query->fetchAll(PDO::FETCH_OBJ));
 }
 $db_var = json_encode($db_var);
@@ -115,7 +104,8 @@ include('header.php');
 //echo $login->user_gravatar_image_url;
 //echo $phplogin_lang['Profile picture'] .'<br/>'. $login->user_gravatar_image_tag;
 
-if (isset($errors)) var_dump($errors);
+// Database failures never get this far: they end the request in the shared
+// bootstrap, with the detail in the log and the generic message on the page.
 
 $list_tabs = '';
 $list_containers = '';

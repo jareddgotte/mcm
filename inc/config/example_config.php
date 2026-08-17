@@ -163,3 +163,30 @@ define("HASH_COST_FACTOR", "10");
 //define('MCM_SESSION_COOKIE_SAMESITE', 'Lax');
 /** true marks the session cookie HTTPS-only. Leave undefined to follow the current request. */
 //define('MCM_SESSION_COOKIE_SECURE', true);
+
+/**
+ * Configuration for: canonical host and HTTPS
+ *
+ * MCM_CANONICAL_HOST is the one host name this site is willing to put in a
+ * redirect. Without it, redirects are still safe - they leave the host out
+ * entirely and stay on whichever one the visitor is using - but the site has no
+ * HTTPS address to send a plain-HTTP visitor to, so nothing is enforced.
+ *
+ * Setting it therefore does two things at once: redirects become absolute
+ * "https://<that host>/..." URLs, and plain-HTTP requests are sent on to the
+ * same address over HTTPS.
+ *
+ * TO SWITCH HTTPS ENFORCEMENT OFF: uncomment the MCM_FORCE_HTTPS line below and
+ * set it to false. The site then serves plain HTTP again on the next request,
+ * with no code change and nothing to re-upload beyond this file. The redirect
+ * is a temporary one for exactly this reason, so browsers do not remember it.
+ * Note that the site does not send Strict-Transport-Security, which browsers
+ * would remember for far longer.
+ */
+
+/** the host used in redirects, e.g. 'example.com' or 'example.com:8443'. No scheme, no path. */
+//define('MCM_CANONICAL_HOST', 'example.com');
+/** false switches HTTPS enforcement off. Leave undefined to enforce once a canonical host is set. */
+//define('MCM_FORCE_HTTPS', false);
+/** true only where a proxy in front of this site terminates TLS and forwards plain HTTP. */
+//define('MCM_TRUST_FORWARDED_PROTO', true);

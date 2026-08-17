@@ -51,8 +51,10 @@ require_once('inc/php-login.php');
 $login = new Login();
 
 if (isset($_POST['login'])) {
-	header('Location: http://'.$_SERVER['HTTP_HOST'].$_SERVER['PHP_SELF'], true, 301);
-	exit;
+	// Same destination as ever - this page - but named by the server rather
+	// than by the request: SCRIPT_NAME is what the web server resolved, and the
+	// host comes from the configuration or is left off entirely.
+	mcm_redirect($_SERVER['SCRIPT_NAME'], 301);
 }
 
 if ($login->isUserLoggedIn() === true) {
