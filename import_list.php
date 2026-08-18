@@ -38,12 +38,12 @@ $user_id       = mcm_current_user_id();
 
 if ($tmdb_list_id === '') { echo 'Error: No import list id given.'; exit(); }
 
-if (!isset($_SESSION['tmdb_obj'])) {
-	$_SESSION['tmdb_obj'] = new TMDb(TMDB_API_KEY);
-}
+// Built for this request and thrown away with it: the wrapper holds the TMDb
+// credential, which has no business being written into the session store.
+$tmdb = new TMDb(TMDB_API_KEY);
 
 //echo "importing list<br>\n";
-$ImportList = $_SESSION['tmdb_obj']->getList($tmdb_list_id);
+$ImportList = $tmdb->getList($tmdb_list_id);
 if (isset($ImportList['status_code'])) {
 	// Both values come straight from TMDb, so neither is rendered as markup.
 	printf("Error: Status code: %s | Message: %s\n", mcm_html($ImportList['status_code']), mcm_html($ImportList['status_message']));

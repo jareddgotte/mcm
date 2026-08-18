@@ -6,9 +6,10 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
 
 
-if (!isset($_SESSION['tmdb_obj'])) {
-	$_SESSION['tmdb_obj'] = new TMDb(TMDB_API_KEY);
-}
+// The wrapper carries the TMDb credential, so it is built for this request and
+// thrown away with it. It used to be kept in $_SESSION, which put the key in
+// the session store on disk for every visitor who ever opened a movie.
+$tmdb = new TMDb(TMDB_API_KEY);
 
 $movie_id = (isset($_POST['id'])) ? $_POST['id'] : ((isset($_GET['id'])) ? $_GET['id'] : '');
 
@@ -16,12 +17,12 @@ $movie_id = (isset($_POST['id'])) ? $_POST['id'] : ((isset($_GET['id'])) ? $_GET
 
 // Get the tmdb config so we can pass it onto the TMDbDisplay class for images
 if (!isset($_SESSION['tmdb_config'])) {
-	$_SESSION['tmdb_config'] = $_SESSION['tmdb_obj']->getConfiguration();
+	$_SESSION['tmdb_config'] = $tmdb->getConfiguration();
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];
 
-$movie = $_SESSION['tmdb_obj']->getMovie($movie_id);
+$movie = $tmdb->getMovie($movie_id);
 $title = $movie['original_title'];
 $genres = $movie['genres'];
 $imdb = $movie['imdb_id'];
@@ -39,7 +40,7 @@ function cmp ($a, $b) {
 	return ($al < $bl) ? -1 : 1;
 }
 
-$trailers = $_SESSION['tmdb_obj']->getMovieTrailers($movie_id);
+$trailers = $tmdb->getMovieTrailers($movie_id);
 $yt_trailers = $trailers['youtube'];
 usort($yt_trailers, "cmp");
 $yt_trailers = array_reverse($yt_trailers);

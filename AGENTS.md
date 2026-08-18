@@ -226,6 +226,35 @@ the application. Setup is documented in `README.md`.
   name with its own bounded reason, because that one is feedback for whoever
   typed it.
 
+## TMDb access
+
+- `inc/tmdb.php` is the first-party, backend-only TMDb client and the only
+  place a TMDb credential is read. It is loaded on demand rather than by the
+  bootstrap, and nothing loads it yet - the proxy entry point that will is a
+  later issue. The credential is `TMDB_READ_ACCESS_TOKEN` and it only ever
+  appears in an `Authorization: Bearer` header on a handle built and closed
+  inside one call: never in a URL, a session, a page, a script or the log.
+- `mcm_tmdb_transport_options()` is deliberately a pure function returning the
+  cURL options, because the suite has no HTTPS endpoint to observe "verifies
+  the peer" and "follows no redirect" against; those facts are asserted off the
+  array a request would be made with. The behaviour that can be observed -
+  bearer header, total timeout, size cap, redirect not followed, categorical
+  failures - is asserted against `tests/pages/tmdb_stub.php` instead. Both are
+  needed: a connect timeout dropped from the options is caught by nothing else.
+- `MCM_TMDB_BASE_URL` reaches the client verbatim, which is the whole test seam,
+  the same one `DB_HOST` gives the database cases. It is safe because the client
+  refuses a plain-HTTP endpoint unless the host is a loopback literal - a
+  request that never leaves the machine cannot put the token on a wire. Weaken
+  that check and remote plaintext becomes reachable; the suite fails if you do.
+- The stub is one PHP built-in server and serves one request at a time, so the
+  case that makes it sleep past the timeout runs last in
+  `tests/pages/tmdb_client.php`. Move it earlier and whatever follows it is
+  answered late and fails as a timeout for a harness reason.
+- The old vendored wrapper in `inc/classes/TMDb.inc` is still what
+  `dialog.php`, `import_list.php` and the two views call, and it still holds
+  `TMDB_API_KEY`; it is built per request now rather than kept in `$_SESSION`.
+  Both it and the dead auth-session path are removed by a later issue.
+
 ## Database access
 
 - Reach the database only through the bootstrap: `mcm_db_or_fail()` for a page

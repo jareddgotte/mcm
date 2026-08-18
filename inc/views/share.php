@@ -2,14 +2,14 @@
 
 if (!isset($_SESSION['db_lists'])) $_SESSION['db_lists'] = $db_lists;
 
-// In a perfect world, this call is only made once per session
-if (!isset($_SESSION['tmdb_obj'])) {
-	$_SESSION['tmdb_obj'] = new TMDb(TMDB_API_KEY);
-}
+// The wrapper holds the TMDb credential, so it lives for this request only.
+// What is worth keeping across requests is its answer, not the object: the
+// configuration below is still fetched once per session.
+$tmdb = new TMDb(TMDB_API_KEY);
 
 // Get the tmdb config so we can pass it onto the TMDbDisplay class for images
 if (!isset($_SESSION['tmdb_config'])) {
-	$_SESSION['tmdb_config'] = $_SESSION['tmdb_obj']->getConfiguration();
+	$_SESSION['tmdb_config'] = $tmdb->getConfiguration();
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];
