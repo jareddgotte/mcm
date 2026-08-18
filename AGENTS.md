@@ -261,10 +261,22 @@ the application. Setup is documented in `README.md`.
   out. An answer is rebuilt field by field rather than forwarded, so an upstream
   field nobody named reaches nobody; `mcm_key_paths()` in `tests/cases.php` is
   what asserts that, by naming every key a response actually holds.
-- The proxy calls none of the four guards, and both it and `tmdb.php` are named
-  in `mcm_unguarded_guard_users()` for it. Every operation is read-only, so
-  there is no write for a CSRF token to protect, and the public sharing page -
-  which has no token - is one of the pages that will use it.
+- Read-only is not the same as public, and each operation declares who may ask
+  it. `configuration`, `movie` and `videos` take any session, because the public
+  sharing page and the movie dialog need them without an account; `search` needs
+  a signed-in caller; `list` needs one who owns the local `movie_list_id` the
+  request names. The order inside `mcm_tmdb_serve()` is the endpoints' own -
+  operation, then the session, then the request's values, then the connection
+  and ownership, then TMDb - so a refusal costs no outbound request, and the
+  suite reads that order off that one function's tokens.
+- Neither the POST guard nor the token guard applies, because nothing here
+  writes. `mcm_read_guarded_guard_users()` in `tests/entrypoints.php` is where
+  that is written down, separately from `mcm_unguarded_guard_users()`, so
+  "this endpoint reads" cannot become a way to opt out of the other two guards.
+- The `list` operation cannot be driven end to end without a database, so its
+  behaviour lives in `tmdb proxy list ownership over a real database` and its
+  projection is covered without one by `tests/pages/tmdb_projection.php`, which
+  hands every projector a payload TMDb would never send.
 - Only the configuration answer is cached, for a day, in a directory the
   application creates 0700 and writes through a temporary file and a rename, so
   a reader never sees half an answer and two writers cannot corrupt one. It
@@ -277,6 +289,14 @@ the application. Setup is documented in `README.md`.
   on one, the stub on the other - because the built-in server answers one
   request at a time and a proxy request reaching a stub on its own server would
   wait for itself. The timeout case stays last for the reason the client's does.
+- With a server open, a fatal in a case is worse than a failure: the run dies,
+  its servers are orphaned, and they hold the run's own output pipe, so a
+  harness driving the suite hangs rather than seeing it fail. Two habits keep
+  that from happening, and both were learned the hard way during a mutation
+  sweep: read into an answer with `mcm_at()` rather than `$body['data'][0]`, so
+  a refusal where an answer was expected is a failing assertion instead of a
+  TypeError; and catch `Throwable`, not `Exception`, in a group that has to stop
+  a server on the way out.
 - The old vendored wrapper in `inc/classes/TMDb.inc` is still what
   `dialog.php`, `import_list.php` and the two views call, and it still holds
   `TMDB_API_KEY`; it is built per request now rather than kept in `$_SESSION`.

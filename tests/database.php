@@ -34,6 +34,9 @@ function mcm_db_uncovered()
 			. ' the schema\'s, so only the schema can enforce it',
 		'a query whose WHERE clause stops restricting the rows it reads or'
 			. ' changes - the SQL still parses and still runs',
+		'an endpoint that reads a row to decide whether to answer at all - the'
+			. ' TMDb proxy asks whose list a request names, and there is no list'
+			. ' to own without a database',
 	);
 }
 

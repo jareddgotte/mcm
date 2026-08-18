@@ -677,7 +677,7 @@ function mcm_guarded_entry_points()
 }
 
 /**
- * The files that load the guards without being guarded by them.
+ * The files that load the guards without being guarded by them at all.
  *
  * A file on this list may call the shared helpers - the token, the value checks,
  * the bounded refusal bodies - and none of the four guards. Naming them
@@ -685,22 +685,39 @@ function mcm_guarded_entry_points()
  * claim as "refuses a request that should be refused", and the suite asserts of
  * each of them that it calls no guard at all.
  *
- * Three files are on it, for three reasons:
- *
- *   index.php          serves a page to whoever asks for it and always has; it
- *                      needs mcm_csrf_token() to hand the browser a token.
- *   tmdb.php           is read-only, so there is no write for a token to
- *                      protect, and the pages that will use it include the
- *                      public sharing page, which has no token to send. It
- *                      needs the bounded refusal bodies.
- *   inc/tmdb_proxy.php is that endpoint's policy, and refuses with the same
- *                      bodies.
+ * One file is on it: index.php serves a page to whoever asks for it and always
+ * has, and needs mcm_csrf_token() to hand the browser a token.
  *
  * @return array
  */
 function mcm_unguarded_guard_users()
 {
-	return array('inc/tmdb_proxy.php', 'index.php', 'tmdb.php');
+	return array('index.php');
+}
+
+/**
+ * The files that adopt some of the guards for a read rather than all four for a
+ * write.
+ *
+ * The four-in-order rule above is a rule about writing: a request that will
+ * change a row has to be a POST, from a signed-in visitor, carrying this
+ * session's token, for a list that is theirs. A read has no row to protect, so
+ * two of those questions do not apply - and saying so in a list of its own is
+ * what keeps "this endpoint reads" from being a way to opt out of the other
+ * two.
+ *
+ * The TMDb proxy is the only such file. tmdb.php is the door and
+ * inc/tmdb_proxy.php is its policy; between them they serve a GET or a POST
+ * without a token, and ask for a signed-in user, and for the owner of the local
+ * list a request names, on the operations that need them. What each operation
+ * asks for is asserted by driving requests at it, in the proxy groups of
+ * tests/cases.php.
+ *
+ * @return array
+ */
+function mcm_read_guarded_guard_users()
+{
+	return array('inc/tmdb_proxy.php', 'tmdb.php');
 }
 
 /**

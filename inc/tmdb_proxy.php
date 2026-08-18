@@ -23,6 +23,18 @@
  *      out. A refusal therefore costs no outbound request, exactly as a guard's
  *      refusal in inc/guards.php costs no query.
  *
+ *   2a. Read-only is not the same as public. Each operation declares who may
+ *      ask it, because this site's credential and this site's request budget
+ *      are what answer it. The configuration, a movie and a movie's videos are
+ *      open to any session: the public sharing page needs the first to build a
+ *      poster URL and is not signed in. Search needs a signed-in caller, so the
+ *      endpoint cannot be used as somebody else's free search API. A list needs
+ *      a signed-in caller and the local list they mean to import into, and that
+ *      list has to be theirs - checked before TMDb is asked for anything, so a
+ *      refusal costs no request. The order is inc/guards.php's own: the session
+ *      answers first and only then is a connection opened, and a refusal is the
+ *      same 403 whether the list belongs to somebody else or to nobody.
+ *
  *   3. An answer is rebuilt rather than forwarded. Each operation names the
  *      fields the existing MCM pages actually use, and the projector copies
  *      those and only those into a new array, one type at a time. A field TMDb
@@ -86,9 +98,11 @@ define('MCM_TMDB_CACHE_MAX_BYTES', 65536);
  * "accepts" is the whole of what a request may carry besides the operation
  * name: a field that is not listed here is refused, so no request field can
  * become a query parameter, a path segment or a transport setting. "required"
- * says which of them a request must carry. "plan" turns the validated values
- * into the path and query one request is made with, and "project" turns the
- * answer into the fields this site's own pages read.
+ * says which of them a request must carry. "caller" says who may ask it at all
+ * - "any" session, a signed-in "user", or the "owner" of the local list the
+ * request names. "plan" turns the validated values into the path and query one
+ * request is made with, and "project" turns the answer into the fields this
+ * site's own pages read.
  *
  * @return array operation => array
  */
@@ -101,38 +115,50 @@ function mcm_tmdb_operations()
 		'configuration' => array(
 			'accepts'  => array(),
 			'required' => array(),
+			'caller'   => 'any',
 			'plan'     => 'mcm_tmdb_plan_configuration',
 			'project'  => 'mcm_tmdb_project_configuration',
 			'cached'   => true,
 		),
-		// The add-a-movie type-ahead.
+		// The add-a-movie type-ahead. Signed in: this site's credential and this
+		// site's request budget are what answer a search.
 		'search' => array(
 			'accepts'  => array('query', 'page'),
 			'required' => array('query'),
+			'caller'   => 'user',
 			'plan'     => 'mcm_tmdb_plan_search',
 			'project'  => 'mcm_tmdb_project_search',
 			'cached'   => false,
 		),
-		// The movie dialog's own details.
+		// The movie dialog's own details. Open to any session, because the
+		// dialog opens from the public sharing page as well as from a
+		// collection.
 		'movie' => array(
 			'accepts'  => array('movie_id'),
 			'required' => array('movie_id'),
+			'caller'   => 'any',
 			'plan'     => 'mcm_tmdb_plan_movie',
 			'project'  => 'mcm_tmdb_project_movie',
 			'cached'   => false,
 		),
-		// The trailers in that dialog, from TMDb's current videos response.
+		// The trailers in that dialog, from TMDb's current videos response, and
+		// open to whoever the dialog is.
 		'videos' => array(
 			'accepts'  => array('movie_id'),
 			'required' => array('movie_id'),
+			'caller'   => 'any',
 			'plan'     => 'mcm_tmdb_plan_videos',
 			'project'  => 'mcm_tmdb_project_videos',
 			'cached'   => false,
 		),
-		// List import.
+		// List import. The request names the TMDb list to read and the local
+		// list it is meant for, and the local one has to belong to whoever is
+		// asking - settled before TMDb is asked anything. import_list.php is
+		// moved onto this by issue #38; it already posts movie_list_id.
 		'list' => array(
-			'accepts'  => array('list_id'),
-			'required' => array('list_id'),
+			'accepts'  => array('list_id', 'movie_list_id'),
+			'required' => array('list_id', 'movie_list_id'),
+			'caller'   => 'owner',
 			'plan'     => 'mcm_tmdb_plan_list',
 			'project'  => 'mcm_tmdb_project_list',
 			'cached'   => false,
@@ -280,6 +306,12 @@ function mcm_tmdb_value($field, $value)
 			return mcm_tmdb_search_query($value);
 		case 'page':
 			return mcm_tmdb_page($value);
+		case 'movie_list_id':
+			// One of this site's own list identifiers rather than a TMDb one, so
+			// it is the same check every other endpoint makes of one. Whose list
+			// it is is a different question, asked later and against the
+			// database; this only settles that the value could be a list at all.
+			return mcm_positive_int($value);
 	}
 
 	// A field with no check is a field this file does not know about, and an
@@ -830,6 +862,60 @@ function mcm_tmdb_upstream_status($category)
 }
 
 /**
+ * Who may ask for one operation: "any", "user" or "owner".
+ *
+ * @param string $operation one that mcm_tmdb_operation_exists() accepted
+ * @return string
+ */
+function mcm_tmdb_caller_policy($operation)
+{
+	$operations = mcm_tmdb_operations();
+
+	return $operations[$operation]['caller'];
+}
+
+/**
+ * Refuse a request from nobody, where this operation needs somebody, and stop.
+ *
+ * Asked before the request's own values are looked at, which is the order
+ * inc/guards.php sets out for a write and the same order for the same reason:
+ * the session answers this on its own, so a request refused here has opened no
+ * connection, sent nothing, and been told nothing about what the operation
+ * would have accepted.
+ *
+ * @param string $operation
+ */
+function mcm_tmdb_require_session($operation)
+{
+	if (mcm_tmdb_caller_policy($operation) !== 'any') {
+		mcm_require_login();
+	}
+}
+
+/**
+ * Refuse a request for somebody else's list, and stop.
+ *
+ * This is the one question that needs a database, so it is the one that comes
+ * after the connection - and it still comes before mcm_tmdb_run() below, so a
+ * refusal has made no outbound request and spent nothing of this site's.
+ *
+ * Every way of failing is mcm_require_list_owner()'s single 403: a list
+ * belonging to somebody else and a list that does not exist are answered
+ * identically, so the response says nothing about whose it is.
+ *
+ * @param array $plan as mcm_tmdb_plan() returns on success
+ */
+function mcm_tmdb_require_owner(array $plan)
+{
+	if (mcm_tmdb_caller_policy($plan['operation']) !== 'owner') {
+		return;
+	}
+
+	$db_connection = mcm_db_or_fail('tmdb proxy: settling who owns the list');
+	mcm_require_list_owner($db_connection, $plan['values']['movie_list_id']);
+}
+
+/**
  * Run one planned operation: fetch, or take the cached answer, and project.
  *
  * The only call to mcm_tmdb_get() in this file is the one below. Everything
@@ -932,12 +1018,25 @@ function mcm_tmdb_serve($request)
 	}
 
 	$operation = (is_array($request) && isset($request[MCM_TMDB_OPERATION_FIELD])) ? $request[MCM_TMDB_OPERATION_FIELD] : '';
-	$plan      = mcm_tmdb_plan($operation, $request);
+	if (!mcm_tmdb_operation_exists($operation)) {
+		// Named first, because which questions come next is a property of the
+		// operation. The same bounded body a guard sends, with the reason in the
+		// log and nowhere else.
+		mcm_json_error(400, 'the TMDb proxy refused a request: no such operation: ' . mcm_log_detail($operation));
+	}
+
+	// Then who is asking, which the session answers on its own.
+	mcm_tmdb_require_session($operation);
+
+	// Then what they asked for.
+	$plan = mcm_tmdb_plan($operation, $request);
 	if (empty($plan['ok'])) {
-		// Refused before anything went out: the same bounded body a guard sends,
-		// with the reason in the log and nowhere else.
 		mcm_json_error(400, 'the TMDb proxy refused a request: ' . $plan['reason']);
 	}
+
+	// And then, for a list, whose list it is - the one question that needs a
+	// connection, and the last one before anything is asked of TMDb.
+	mcm_tmdb_require_owner($plan);
 
 	$result = mcm_tmdb_run($plan);
 	if (empty($result['ok'])) {
