@@ -691,3 +691,38 @@ function mcm_write_statements($file)
 	}
 	return $found;
 }
+
+/**
+ * Whether a write statement from mcm_write_statements() actually restricts by
+ * owner, rather than merely mentioning "user_id" somewhere in the string.
+ *
+ * A bare substring check (does "user_id" appear anywhere in the SQL text)
+ * passes for an UPDATE that only sets user_id, or that names it in a comment-
+ * like alias, and passes for a DELETE with no WHERE clause at all as long as
+ * user_id shows up in the table or column list elsewhere. This instead parses
+ * the statement's own shape: for an INSERT, user_id must be one of the columns
+ * being written; for an UPDATE or DELETE, user_id must appear in the WHERE
+ * clause bound to :user_id by equality, which is what a database driver would
+ * actually use to restrict the rows touched.
+ *
+ * @param string $sql one flattened statement from mcm_write_statements()
+ * @return bool
+ */
+function mcm_statement_owner_qualified($sql)
+{
+	$sql = trim($sql);
+
+	if (preg_match('/^INSERT\s+INTO\s+\S+\s*\(([^)]*)\)/i', $sql, $matches) === 1) {
+		$columns = array_map('trim', explode(',', $matches[1]));
+		return in_array('user_id', $columns, true);
+	}
+
+	if (preg_match('/^(UPDATE|DELETE)\b/i', $sql) === 1) {
+		if (preg_match('/\bWHERE\b(.*)$/is', $sql, $matches) !== 1) {
+			return false;
+		}
+		return preg_match('/\buser_id\s*=\s*:user_id\b/i', $matches[1]) === 1;
+	}
+
+	return false;
+}

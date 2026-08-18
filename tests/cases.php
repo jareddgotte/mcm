@@ -1833,30 +1833,56 @@ t_group('list endpoint guards', function () {
 
 	/* What the source says ------------------------------------------------- */
 
+	// mcm_statement_owner_qualified() has to actually parse the statement's
+	// shape rather than grep for the substring "user_id" - prove that against
+	// deliberately broken statement strings before trusting it against the real
+	// endpoints below. Each of these is built here, not read from the checkout.
+	$broken_update_only_in_set = 'UPDATE movie_lists SET user_id = :user_id WHERE movie_list_id = :movie_list_id';
+	$broken_delete_no_where    = 'DELETE FROM movie_lists';
+	$broken_delete_wrong_where = 'DELETE FROM movie_lists WHERE movie_list_id = :movie_list_id';
+	$broken_insert_missing     = 'INSERT INTO movie_lists (list_name, list_rank) VALUES (:list_name, :list_rank)';
+	$correct_update            = 'UPDATE movie_lists SET list_name = :list_name WHERE movie_list_id = :movie_list_id AND user_id = :user_id';
+	$correct_delete            = 'DELETE FROM movie_lists WHERE movie_list_id = :movie_list_id AND user_id = :user_id';
+	$correct_insert            = 'INSERT INTO movie_lists (user_id, list_name, list_rank) VALUES (:user_id, :list_name, :list_rank)';
+
+	t_same(false, mcm_statement_owner_qualified($broken_update_only_in_set), 'owner check rejects user_id that only appears in SET, not WHERE');
+	t_same(false, mcm_statement_owner_qualified($broken_delete_no_where), 'owner check rejects a DELETE with no WHERE clause at all');
+	t_same(false, mcm_statement_owner_qualified($broken_delete_wrong_where), 'owner check rejects a WHERE that names only the list, not the owner');
+	t_same(false, mcm_statement_owner_qualified($broken_insert_missing), 'owner check rejects an INSERT that does not write user_id');
+	t_same(true, mcm_statement_owner_qualified($correct_update), 'owner check accepts an UPDATE whose WHERE restricts by user_id');
+	t_same(true, mcm_statement_owner_qualified($correct_delete), 'owner check accepts a DELETE whose WHERE restricts by user_id');
+	t_same(true, mcm_statement_owner_qualified($correct_insert), 'owner check accepts an INSERT that writes user_id');
+
 	foreach (array_keys($mutations) as $page) {
 		$path = MCM_REPO_ROOT . '/' . $page;
 
+		// The behavioral halves below (this group's HTTP section, and "real
+		// database: list ownership") already prove a signed-out or wrong-owner
+		// caller cannot write; this call count is a cheap regression anchor on
+		// top of that, not the only evidence for it.
 		t_same(1, mcm_count_calls($path, 'mcm_require_login'), $page . ' asks for a signed-in user exactly once');
 
-		// Every statement in the file that changes a row names the owner as well
-		// as the row. The guard is what refuses the request; this is what leaves
-		// the statement itself unable to touch somebody else's list even if the
-		// guard above it were ever removed.
+		// This is the one claim in this block that behavioral tests cannot make:
+		// the ownership guard in front of every one of these statements already
+		// refuses a foreign request before the statement ever runs, so no HTTP
+		// case can observe what the WHERE clause alone would have done. It is a
+		// deliberate second layer - the guard refuses the request, and this
+		// leaves the statement itself unable to reach another account's row even
+		// if the guard above it were ever dropped - so it is asserted here as
+		// its own claim.
 		foreach (mcm_write_statements($path) as $sql) {
 			if (stripos($sql, 'movie_lists') === false && stripos($sql, 'movies') === false) {
 				continue;
 			}
-			if (stripos($sql, 'INSERT INTO movie_lists') === 0) {
-				// An insert has no row to qualify: it writes the owner instead.
-				t_contains('user_id', $sql, $page . ': the insert names the owner it is writing for');
-				continue;
-			}
-			t_contains('user_id', $sql, $page . ': a statement that changes a row names the owner - ' . $sql);
+			t_ok(mcm_statement_owner_qualified($sql), $page . ': a statement that changes a row is qualified by owner - ' . $sql);
 		}
 	}
 
 	// The four that are handed a list identifier check whose it is. create_list
-	// is the one that is not: it makes a list rather than changing one.
+	// is the one that is not: it makes a list rather than changing one. Which
+	// actor may and may not write is proven behaviorally below and in "real
+	// database: list ownership"; this is the regression anchor for how that is
+	// wired.
 	foreach (array('rename_list.php', 'delete_list.php') as $page) {
 		t_same(1, mcm_count_calls(MCM_REPO_ROOT . '/' . $page, 'mcm_require_list_owner'), $page . ' checks the owner of the list it was given');
 	}
@@ -1866,7 +1892,10 @@ t_group('list endpoint guards', function () {
 	t_same(0, mcm_count_calls(MCM_REPO_ROOT . '/create_list.php', 'mcm_require_list_owner'), 'create_list.php has no existing list to own');
 
 	// The new list's identity comes from the insert. The read-back this replaced
-	// looked it up by owner and rank, which is not a unique pair.
+	// looked it up by owner and rank, which is not a unique pair. The behavioral
+	// regression for this (a second list created at a rank another list already
+	// holds) lives in "real database: list ownership"; this is the anchor on the
+	// source shape that makes it true.
 	$create = MCM_REPO_ROOT . '/create_list.php';
 	t_contains('lastInsertId', mcm_flat_source($create), 'create_list.php takes the new identifier from the insert itself');
 	t_lacks('SELECT movie_list_id FROM movie_lists', mcm_flat_source($create), 'create_list.php no longer reads the new list back by rank');
