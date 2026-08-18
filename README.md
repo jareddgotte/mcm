@@ -37,6 +37,8 @@ Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothin
 #### The optional database group
 One group is the exception, and it is optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.
 
+The third kind is why the list endpoints are driven here as well: with rows to work on, the suite can sign in as a list's owner, as somebody else, and as nobody at all, and check the rows afterwards rather than only the response.  Without a database it still checks that an anonymous or malformed request is refused before a connection is opened.
+
 To cover those three, download a **MariaDB or MySQL binary tarball**, unpack it anywhere you like, and point the suite at the server binary inside it:
 
 ```
@@ -50,6 +52,7 @@ Two things about the tracked schema decide whether it loads, and both are the sc
 - `users.user_registration_datetime` defaults to `'0000-00-00 00:00:00'`, which a server whose `sql_mode` contains `NO_ZERO_DATE` refuses — MySQL 5.7 and later have it on by default, MariaDB does not.  The dump opens with its own `SET SQL_MODE` line, and running that line as part of the load is what makes the rest of it loadable.  The application's own connections are unaffected and run on the server's default `sql_mode`, which on a current server includes `STRICT_TRANS_TABLES`; under that mode a value too long for its column is an error rather than the silent truncation older servers performed.
 
 ### Notes
+- The endpoints that create, rename, reorder, share and delete a movie list require a signed-in owner.  A request from nobody is refused with `401`, a request for somebody else's list with `403`, and a request that is not the shape the page sends with `400`; every refusal answers with a fixed generic body and puts the reason in the server-side log only.  A request naming several lists at once changes none of them unless the caller owns all of them.
 - The `/inc` directory is served-but-internal, so `/inc/.htaccess` and `/inc/config/.htaccess` deny direct web access to it.  The registration captcha at `/inc/showCaptcha.php` is the one deliberate exception, since the browser requests that image directly.
 - Config files check for the `MCM_BOOTSTRAP` constant, which is defined by `/inc/bootstrap.php` before the config is included.  This means a direct request to a config file stops immediately even if a web-server rule is missing.
 - Both cookies a visitor holds — the session cookie and the remember-me cookie — carry `HttpOnly` and `SameSite`, and are marked `Secure` when the request they go out on is over HTTPS.  `MCM_SESSION_COOKIE_SECURE` and `MCM_SESSION_COOKIE_SAMESITE` set that for both at once; the cookie names, lifetimes and domains are unchanged, so a cookie already in a browser keeps working.

@@ -641,3 +641,53 @@ function mcm_check_entry_point($file, $root)
 	}
 	return $problems;
 }
+
+/**
+ * The entry points that have adopted the shared guards, project-relative and
+ * sorted.
+ *
+ * Adoption is deliberate and endpoint by endpoint, so this is a written-down
+ * list rather than something derived from the source: derived from the source
+ * it would agree with whatever the source happens to do, which is the one thing
+ * an adoption check must not do.
+ *
+ * @return array
+ */
+function mcm_guarded_entry_points()
+{
+	return array(
+		'adjust_lists.php',
+		'create_list.php',
+		'delete_list.php',
+		'rename_list.php',
+		'share_lists.php',
+	);
+}
+
+/**
+ * The statements in a file that write to the database, as flat token strings.
+ *
+ * "Writes" means the three verbs that change a row. Reading the statement's own
+ * tokens is what makes this usable as evidence: a file that mentions a WHERE
+ * clause in a comment, or qualifies a different query by owner elsewhere, must
+ * not be able to satisfy an assertion about this one. Comments are already gone
+ * by the time the tokenizer is done with them.
+ *
+ * @param string $file
+ * @return array one flat string per writing statement
+ */
+function mcm_write_statements($file)
+{
+	$found = array();
+
+	foreach (mcm_tokens($file) as $token) {
+		if ($token['id'] !== T_CONSTANT_ENCAPSED_STRING) {
+			continue;
+		}
+		$sql = trim($token['text'], "'\"");
+		if (preg_match('/^\s*(UPDATE|DELETE|INSERT)\s/i', $sql) === 1) {
+			$found[] = preg_replace('/\s+/', ' ', $sql);
+		}
+	}
+	return $found;
+}
