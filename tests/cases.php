@@ -2774,7 +2774,7 @@ t_group('list name validation', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 19. The baseline headers every response carries
+ * 21. The baseline headers every response carries
  * ---------------------------------------------------------------------------
  */
 
@@ -2953,7 +2953,7 @@ t_group('security headers', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 20. The attributes on a cookie that is not the session cookie
+ * 22. The attributes on a cookie that is not the session cookie
  * ---------------------------------------------------------------------------
  */
 
