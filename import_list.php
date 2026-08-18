@@ -3,23 +3,28 @@
 // import TMDb list into my db
 
 require_once(__DIR__ . '/inc/bootstrap.php');
-// An import writes a whole list's worth of rows, so who is asking and whose
-// list they are writing into are settled with the shared guards before any of
-// it - and before the request goes out to TMDb, which is work nobody should be
-// able to make this site do without an account.
+// An import writes a whole list's worth of rows, so how the request arrived, who
+// is asking, whether they meant to ask and whose list they are writing into are
+// all settled with the shared guards before any of it - and before the request
+// goes out to TMDb, which is work nobody should be able to make this site do
+// without an account.
 require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Nobody signed in has no list to import into.
+// A POST from a signed-in visitor, carrying this session's own token. All three
+// are settled before the connection is opened, and so long before TMDb is asked
+// for anything.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 
-$movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
+$movie_list_id = isset($_POST['movie_list_id']) ? $_POST['movie_list_id'] : '';
 //$movie_list_id = 1;
 // Be sure to handle whether it's an id OR a url with the id in it
-$tmdb_list_id = (isset($_POST['tmdb_list_id'])) ? $_POST['tmdb_list_id'] : ((isset($_GET['tmdb_list_id'])) ? $_GET['tmdb_list_id'] : '');
+$tmdb_list_id = isset($_POST['tmdb_list_id']) ? $_POST['tmdb_list_id'] : '';
 //$tmdb_list_id = "5212934a760ee36af148407c"; // debug
 //The following may be used when "creating list from import"
-//$list_name = (isset($_POST['name'])) ? $_POST['name'] : ((isset($_GET['name'])) ? $_GET['name'] : '');
+//$list_name = isset($_POST['name']) ? $_POST['name'] : '';
 //$list_name = 'test list';
 
 //echo "trying to connect to db<br>\n";

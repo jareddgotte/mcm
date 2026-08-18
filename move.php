@@ -4,16 +4,20 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // A move reads from one list and writes to another, so both lists have to be
 // this user's: a check on the source alone would let a movie be pushed into
 // somebody else's collection, and a check on the destination alone would let
-// one be pulled out of it.
+// one be pulled out of it. The cheap guards - method, session, token - settle
+// first, before either list identifier is read.
 require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Nobody signed in has no lists to move anything between.
+// A POST from a signed-in visitor, carrying this session's own token, before
+// either end of the move is so much as read.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 
-$from_list = (isset($_POST['from_list'])) ? $_POST['from_list'] : ((isset($_GET['from_list'])) ? $_GET['from_list'] : '');
-$to_list = (isset($_POST['to_list'])) ? $_POST['to_list'] : ((isset($_GET['to_list'])) ? $_GET['to_list'] : '');
-$movie_id = (isset($_POST['movie_id'])) ? $_POST['movie_id'] : ((isset($_GET['movie_id'])) ? $_GET['movie_id'] : '');
+$from_list = isset($_POST['from_list']) ? $_POST['from_list'] : '';
+$to_list = isset($_POST['to_list']) ? $_POST['to_list'] : '';
+$movie_id = isset($_POST['movie_id']) ? $_POST['movie_id'] : '';
 
 //printf("f[%s] t[%s] m[%s]\n", $from_list, $to_list, $movie_id);
 //echo "trying to connect to db<br>\n";

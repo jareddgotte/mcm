@@ -653,6 +653,11 @@ function mcm_check_entry_point($file, $root)
  * it would agree with whatever the source happens to do, which is the one thing
  * an adoption check must not do.
  *
+ * index.php is on it for a reason that is not a guard: it is the page that hands
+ * the session's CSRF token to the browser, and mcm_csrf_token() lives in the
+ * guards. mcm_unguarded_guard_users() below is what says so, and the suite
+ * checks that it guards nothing.
+ *
  * @return array
  */
 function mcm_guarded_entry_points()
@@ -664,10 +669,147 @@ function mcm_guarded_entry_points()
 		'delete_list.php',
 		'delete_movie.php',
 		'import_list.php',
+		'index.php',
 		'move.php',
 		'rename_list.php',
 		'share_lists.php',
 	);
+}
+
+/**
+ * The entry points that load the guards without being guarded by them.
+ *
+ * A page on this list may call the token helpers and nothing else. Naming them
+ * separately is what stops "loads inc/guards.php" from quietly becoming the
+ * same claim as "refuses a request that should be refused": index.php serves a
+ * page to whoever asks for it and always has, and the suite asserts that it
+ * calls none of the four guards.
+ *
+ * @return array
+ */
+function mcm_unguarded_guard_users()
+{
+	return array('index.php');
+}
+
+/**
+ * The four guards, by name, so a case can say which of them a file calls.
+ *
+ * @return array
+ */
+function mcm_guard_functions()
+{
+	return array('mcm_require_post', 'mcm_require_login', 'mcm_require_csrf', 'mcm_require_list_owner');
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * The browser side
+ * ---------------------------------------------------------------------------
+ *
+ * The suite has a PHP command line and nothing else, so nothing here runs any
+ * JavaScript. What these read instead is the shape of the file, and they read
+ * it the way the checks above read PHP: narrowly, off the construct in
+ * question, so that a fact about one call cannot be satisfied by a different
+ * one elsewhere in the file.
+ */
+
+/**
+ * The $.ajax() calls in a JavaScript file: the URL each one names, and the
+ * method it declares.
+ *
+ * Not a JavaScript parser, and it does not have to be. It finds each "$.ajax({",
+ * takes the object literal up to the brace that closes it - counting braces, so
+ * the nested "data" object does not end it early - and reads the two properties
+ * out of that literal alone. A call written some other way yields an empty
+ * string, which fails the case reading it rather than passing quietly.
+ *
+ * @param string $file
+ * @return array one array('url' => ..., 'type' => ...) per call, in file order
+ */
+function mcm_js_ajax_calls($file)
+{
+	$source = file_get_contents($file);
+	$length = strlen($source);
+	$found  = array();
+	$offset = 0;
+
+	while (($start = strpos($source, '$.ajax({', $offset)) !== false) {
+		$open   = $start + strlen('$.ajax(');
+		$depth  = 0;
+		$end    = $length;
+		for ($cursor = $open; $cursor < $length; $cursor++) {
+			if ($source[$cursor] === '{') {
+				$depth++;
+			} elseif ($source[$cursor] === '}') {
+				$depth--;
+				if ($depth === 0) {
+					$end = $cursor;
+					break;
+				}
+			}
+		}
+
+		$block   = substr($source, $open, $end - $open);
+		$found[] = array(
+			'url'  => mcm_js_property($block, 'url'),
+			'type' => mcm_js_property($block, 'type'),
+		);
+		$offset = $open;
+	}
+
+	return $found;
+}
+
+/**
+ * One string-valued property of a JavaScript object literal, or ''.
+ *
+ * @param string $block the literal's body
+ * @param string $name
+ * @return string
+ */
+function mcm_js_property($block, $name)
+{
+	$pattern = '/(?:^|[,{\s])' . preg_quote($name, '/') . '\s*:\s*([\'"])(.*?)\1/s';
+
+	return (preg_match($pattern, $block, $match) === 1) ? $match[2] : '';
+}
+
+/**
+ * The body of one named function call in a JavaScript file - "$.ajaxPrefilter("
+ * and everything up to the parenthesis that closes it.
+ *
+ * The point is the same as mcm_method_tokens()'s: a claim about what the
+ * prefilter does has to be read from the prefilter, not from the file around
+ * it. Returns '' when the file makes no such call.
+ *
+ * @param string $file
+ * @param string $call
+ * @return string
+ */
+function mcm_js_call_body($file, $call)
+{
+	$source = file_get_contents($file);
+	$start  = strpos($source, $call . '(');
+	if ($start === false) {
+		return '';
+	}
+
+	$open   = $start + strlen($call);
+	$depth  = 0;
+	$length = strlen($source);
+	for ($cursor = $open; $cursor < $length; $cursor++) {
+		if ($source[$cursor] === '(') {
+			$depth++;
+		} elseif ($source[$cursor] === ')') {
+			$depth--;
+			if ($depth === 0) {
+				return substr($source, $open + 1, $cursor - $open - 1);
+			}
+		}
+	}
+
+	return '';
 }
 
 /**

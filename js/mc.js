@@ -1,3 +1,30 @@
+// Every request this page makes back to this site carries the session's CSRF
+// token, and every one of them is a POST: the mutation endpoints require both.
+// Wiring it here rather than at each call site is what keeps the two from
+// drifting apart - a call added later is covered without anybody remembering to
+// cover it.
+//
+// The header is the way it travels, not a field, so nothing has to be spliced
+// into a body that is sometimes JSON, and so it never lands in a URL.
+//
+// Which requests leave this site is the half that matters. The type-ahead
+// searches TMDb through this same jQuery, and a token is a credential: it must
+// not go anywhere but here. jQuery has already answered that question by the
+// time a prefilter runs - it resolves the URL, including a protocol-relative
+// one, and compares scheme, host and port against this page's - so this reads
+// its answer instead of picking the URL apart again and getting it subtly wrong.
+//
+// csrf_token is read when the request is made rather than when this file loads.
+// It has to be: the page defines it in an inline script that the header renders
+// after every one of these files, so at load time it does not exist yet. typeof
+// is what makes that safe, and is also what keeps a page that has no token at
+// all from throwing here rather than being refused by the server.
+$.ajaxPrefilter(function (options, originalOptions, jqXHR) {
+	if (options.crossDomain) return
+	if (typeof csrf_token !== 'string' || csrf_token === '') return
+	jqXHR.setRequestHeader('X-CSRF-Token', csrf_token)
+})
+
 var alertNum = 0
 // The message is content rather than markup: a string is shown as text, and a
 // caller that wants an element in the middle of its wording - the <abbr> naming

@@ -762,7 +762,8 @@ t_group('database failure', function () {
 	// a request with nobody behind it before it ever opens a connection. Being
 	// signed in is what lets this group reach the outage it is about.
 	$signed_in = 'd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0';
-	mcm_seed_session($fixture, $signed_in, array('user_name' => 'outage-user', 'user_id' => 4, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $signed_in, array('user_name' => 'outage-user', 'user_id' => 4, 'user_logged_in' => 1));
+	$as_signed_in = mcm_session_headers($signed_in);
 
 	$server = mcm_server_start($fixture);
 	try {
@@ -817,8 +818,10 @@ t_group('database failure', function () {
 		t_lacks($password, $response['body'], 'a failed connection does not put the password on the page');
 
 		// 4. A real entry point, end to end. rename_list.php is the smallest of
-		// them: two parameters, one connection, one query.
-		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything', array('Cookie: PHPSESSID=' . $signed_in));
+		// them: two parameters, one connection, one query. It is a POST carrying
+		// this session's token, because that is now the only kind of request it
+		// serves - which is what lets it get as far as the outage.
+		$response = mcm_http_post($server, '/rename_list.php', array('movie_list_id' => 1, 'list_name' => 'anything'), $as_signed_in);
 
 		t_same(500, $response['status'], 'a real page during an outage: the response says the request failed');
 		t_same(mcm_generic_message(), $response['body'], 'a real page during an outage: the client gets the generic message and nothing else');
@@ -864,16 +867,28 @@ t_group('database failure', function () {
 		// A page that never reaches the database is unaffected by the outage. The
 		// name is validated before the connection is opened, so a name the page
 		// refuses is answered the same during an outage as at any other time.
-		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=' . rawurlencode(str_repeat('a', 65)), array('Cookie: PHPSESSID=' . $signed_in));
+		$response = mcm_http_post($server, '/rename_list.php', array('movie_list_id' => 1, 'list_name' => str_repeat('a', 65)), $as_signed_in);
 		t_same(200, $response['status'], 'a page that stops on its own input check is unaffected');
 		t_contains('List name is longer than 64 characters', $response['body'], 'the input check still answers');
 		t_same('', $response['log'], 'the input check answered without reaching the outage');
 
 		// And a request with nobody behind it stops earlier still: the guard
 		// refuses it, and no connection is attempted for it either.
-		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything');
+		$response = mcm_http_post($server, '/rename_list.php', array('movie_list_id' => 1, 'list_name' => 'anything'));
 		t_same(401, $response['status'], 'an anonymous request stops before the connection');
 		t_lacks('SQLSTATE', $response['log'], 'an anonymous request never reaches the outage');
+
+		// So does one that is signed in but carries no token, and one that is
+		// not a POST at all. Neither opens a connection either, which is the
+		// whole of "refused without changing data" on a fixture with no
+		// database to change.
+		$response = mcm_http_post($server, '/rename_list.php', array('movie_list_id' => 1, 'list_name' => 'anything'), array('Cookie: PHPSESSID=' . $signed_in));
+		t_same(403, $response['status'], 'a request with no token stops before the connection');
+		t_lacks('SQLSTATE', $response['log'], 'a request with no token never reaches the outage');
+
+		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything', $as_signed_in);
+		t_same(405, $response['status'], 'a GET stops before the connection');
+		t_lacks('SQLSTATE', $response['log'], 'a GET never reaches the outage');
 	} catch (Exception $exception) {
 		t_ok(false, 'the database failure cases ran', $exception->getMessage());
 	}
@@ -1563,6 +1578,22 @@ t_group('guard csrf tokens', function () {
 		$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array('csrf_token' => $token), array('Cookie: PHPSESSID=' . $theirs))['body']);
 		t_same('false', $report['valid_submitted'], "refused: another session's token");
 		t_ok($report['token'] !== $token, 'each session is handed its own token');
+
+		// A session seeded with a token of its own, which is how every case
+		// below drives a signed-in browser. The suite writes the session key out
+		// as a literal rather than loading the application to ask for it, so
+		// this is where that literal is checked: the page reports the token it
+		// found, and it is the one that was seeded. Get the key wrong and every
+		// one of those cases would be exercising a session with no token at all.
+		$seeded = 'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3';
+		mcm_seed_signed_in($fixture, $seeded, array('user_name' => 'seeded-user', 'user_id' => 9, 'user_logged_in' => 1));
+
+		$report = mcm_report(mcm_http($server, '/guard_csrf.php', array('Cookie: PHPSESSID=' . $seeded))['body']);
+		t_same(mcm_session_token($seeded), $report['session_token_before'], 'a seeded session carries the token the suite gave it');
+		t_same(mcm_session_token($seeded), $report['token'], 'and is handed that same token rather than a new one');
+
+		$report = mcm_report(mcm_http_post($server, '/guard_csrf.php', array(), mcm_session_headers($seeded))['body']);
+		t_same('true', $report['valid_submitted'], 'a request built from mcm_session_headers() carries a token that session accepts');
 	} catch (Exception $exception) {
 		t_ok(false, 'the CSRF token cases ran', $exception->getMessage());
 	}
@@ -1790,6 +1821,52 @@ t_group('guards are additive', function () {
 	sort($callers);
 	t_same(mcm_guarded_entry_points(), $callers, 'the guards are loaded by exactly the endpoints that have adopted them');
 
+	// Which of the four each of them asks, and in the one order that can answer
+	// them without a refusal arriving after something has already been written.
+	// What a guard refuses is proven by driving requests at it; this is the
+	// anchor on the wiring behind that, and it is the only place the order
+	// itself is stated, because no request can observe the difference between
+	// "refused before the connection" and "refused before the connection, in
+	// this sequence".
+	foreach (mcm_guarded_entry_points() as $page) {
+		$path   = MCM_REPO_ROOT . '/' . $page;
+		$source = mcm_flat_source($path);
+
+		// One page loads this file without being guarded by it: index.php needs
+		// mcm_csrf_token() to hand the browser a token, and guards nothing. It
+		// has always served a page to whoever asked, and still does.
+		if (in_array($page, mcm_unguarded_guard_users(), true)) {
+			foreach (mcm_guard_functions() as $guard) {
+				t_same(0, mcm_count_calls($path, $guard), $page . ' loads the guards and calls ' . $guard . '() nowhere');
+			}
+			continue;
+		}
+
+		t_same(1, mcm_count_calls($path, 'mcm_require_post'), $page . ' refuses anything that is not a POST, exactly once');
+		t_same(1, mcm_count_calls($path, 'mcm_require_csrf'), $page . " asks for this session's token, exactly once");
+
+		$post  = strpos($source, 'mcm_require_post');
+		$login = strpos($source, 'mcm_require_login');
+		$csrf  = strpos($source, 'mcm_require_csrf');
+		$open  = strpos($source, 'mcm_db_or_fail');
+		$owner = strpos($source, 'mcm_require_list_owner');
+
+		t_ok($post !== false && $login !== false && $csrf !== false, $page . ' asks all three of the questions that need no database');
+		t_ok($post < $login, $page . ' settles the method before it looks at the session');
+		t_ok($login < $csrf, $page . ' settles who is asking before it checks their token');
+		t_ok($open !== false && $csrf < $open, $page . ' settles the token before it opens a connection');
+		if ($owner !== false) {
+			t_ok($open < $owner, $page . ' opens the connection before it asks whose list this is');
+		}
+
+		// And a value the request carries is read from the POST body only. The
+		// method guard above is what refuses a GET; this is what leaves the page
+		// unable to take a value off a query string even if that guard were ever
+		// dropped, exactly as the owner in each WHERE clause is the second layer
+		// under the ownership guard.
+		t_lacks('$_GET', $source, $page . ' reads no request value from the query string');
+	}
+
 	// The guards are a file of declarations: loading them has to be silent, and
 	// on its own must not produce a page.
 	$fixture  = mcm_fixture('guards-additive');
@@ -1807,7 +1884,147 @@ t_group('guards are additive', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 16. The list endpoints: who may write, and what a malformed request gets
+ * 16. The token's round trip: into the page, and back out of the browser
+ * ---------------------------------------------------------------------------
+ *
+ * The guards above answer "was this request made from a page this site handed
+ * out". That is only worth anything if the page really does hand the token out,
+ * really does send it back, and really does keep it to itself on the way. Two
+ * of those three are claims about a file the suite cannot execute - there is no
+ * JavaScript runtime here, and there will not be one - so they are read off the
+ * construct that makes them, the same way the PHP claims above are: the
+ * prefilter's own body, and the object literal of each call.
+ *
+ * The pattern the browser decides by is not restated here. It is lifted out of
+ * js/mc.js and run, so a pattern that stopped excluding the address the
+ * type-ahead calls would fail this group rather than pass it.
+ */
+
+t_group('the csrf token reaches the browser and stays inside this site', function () {
+	$guards = MCM_REPO_ROOT . '/inc/guards.php';
+	$view   = MCM_REPO_ROOT . '/inc/views/logged_in.php';
+	$script = MCM_REPO_ROOT . '/js/mc.js';
+
+	/* 1. Into the page, once, and nowhere else --------------------------- */
+
+	// Which pages mint a token at all. A sharing link is not authenticated and
+	// its view must never be handed one; neither must the login or registration
+	// pages, which have no session to bind it to yet. Derived from the source
+	// on purpose: the claim is about every file in the project, and a new page
+	// that started handing the token out would have to answer to this line.
+	$minting = array();
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		if ($file === $guards) {
+			continue;
+		}
+		if (mcm_count_calls($file, 'mcm_csrf_token') > 0) {
+			$minting[] = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		}
+	}
+	sort($minting);
+	t_same(array('inc/views/logged_in.php'), $minting, 'the signed-in view is the only page that hands out a token');
+
+	// And it hands it over as a value inside a script block, through the
+	// escaper for that destination. A token in a URL would end up in a history
+	// entry, a referrer and a server log; mcm_js() is the only escaper that can
+	// be right here, and mcm_url() would be the sign it had gone the other way.
+	$view_source = mcm_flat_source($view);
+	t_contains('mcm_js ( mcm_csrf_token ( ) )', $view_source, 'the token is escaped for the script block it is embedded in');
+	t_lacks('mcm_url ( mcm_csrf_token', $view_source, 'the token is never escaped as part of a URL');
+	t_same(0, mcm_count_calls($view, 'mcm_redirect'), 'the signed-in view builds no redirect at all, so none can carry it');
+
+	// The public sharing page asks for none of this and must keep working
+	// exactly as it did. Its own script file makes no request that could need a
+	// token, which is why nothing on that page had to change.
+	foreach (array('share.php', 'inc/views/share.php') as $public) {
+		foreach (mcm_guard_functions() as $guard) {
+			t_same(0, mcm_count_calls(MCM_REPO_ROOT . '/' . $public, $guard), $public . ' never calls ' . $guard . '(): a sharing link is not authenticated');
+		}
+	}
+	t_same(array(), mcm_js_ajax_calls(MCM_REPO_ROOT . '/js/share.js'), 'the sharing page makes no request of its own');
+
+	/* 2. Back out of the browser ----------------------------------------- */
+
+	// Every request js/mc.js makes back to this site, and there are exactly as
+	// many of them as there are endpoints requiring a token. Each is a POST,
+	// because a GET is now refused on the method alone.
+	$endpoints = array_values(array_diff(mcm_guarded_entry_points(), mcm_unguarded_guard_users()));
+	$calls     = mcm_js_ajax_calls($script);
+	$targets   = array();
+	foreach ($calls as $call) {
+		t_same('POST', $call['type'], 'js/mc.js requests ' . ($call['url'] === '' ? '(an unreadable call)' : $call['url']) . ' with POST');
+		$targets[] = $call['url'];
+	}
+	sort($targets);
+	t_same($endpoints, $targets, 'the endpoints the page calls are exactly the ones that now require a POST and a token');
+
+	// One shared place decides what goes on a request, rather than nine call
+	// sites each remembering to.
+	$source    = file_get_contents($script);
+	$prefilter = mcm_js_call_body($script, '$.ajaxPrefilter');
+	t_ok($prefilter !== '', 'js/mc.js installs a shared prefilter');
+	t_same(1, substr_count($source, '$.ajaxPrefilter('), 'and exactly one of them');
+	t_contains('setRequestHeader', $prefilter, 'the prefilter is what puts the token on a request');
+	t_contains('csrf_token', $prefilter, 'and what it puts there is the token the page was given');
+	// Read when the request is made, not when the file loads: the header
+	// renders every script file before the inline block that defines the token,
+	// so at load time there is nothing to read.
+	t_contains('typeof csrf_token', $prefilter, 'the prefilter reads the token at request time');
+	$header_view = mcm_flat_source(MCM_REPO_ROOT . '/inc/views/header.php');
+	t_ok(strpos($header_view, 'post_scripts') < strpos($header_view, '$script'), 'the page loads its script files before the block that defines the token');
+
+	// The name the browser sends and the name the server reads are one name.
+	// PHP renames a request header on the way into $_SERVER, so comparing the
+	// two spellings by eye proves nothing; this builds the server's spelling
+	// out of the browser's and looks for it in the guards.
+	$sent = '';
+	if (preg_match('/setRequestHeader\(\s*\'([^\']+)\'/', $prefilter, $match) === 1) {
+		$sent = $match[1];
+	}
+	t_ok($sent !== '', 'the prefilter names the header it sets');
+	t_contains("'HTTP_" . str_replace('-', '_', strtoupper($sent)) . "'", mcm_flat_source($guards), 'the guards read the header the browser sends');
+
+	/* 3. And no further than this site ----------------------------------- */
+
+	// The type-ahead searches TMDb through the same jQuery, so "put the token on
+	// every request" would hand a credential to somebody else's server. What
+	// stops it is jQuery's own answer: it resolves the URL - a protocol-relative
+	// one included - and compares scheme, host and port against the page's,
+	// before any prefilter runs. Reading that answer is the point, because a
+	// second implementation of the same rule in this file is a second
+	// implementation to get wrong.
+	t_contains('crossDomain', $prefilter, 'the prefilter asks jQuery whether the request leaves this site');
+	t_ok(
+		strpos($prefilter, 'crossDomain') < strpos($prefilter, 'setRequestHeader'),
+		'and asks before it puts anything on the request'
+	);
+	// No pattern of its own, which is also what keeps this file readable by the
+	// scanner the browser-rendering checks are built on.
+	t_same(array(), mcm_js_regex_literals($script), 'the prefilter picks no URL apart itself');
+
+	// That answer is only as good as the addresses it is given. Every request
+	// this page makes to this site is named relatively, so it resolves to this
+	// origin whatever the site is deployed at; the one address that is not this
+	// site names its scheme and host in full, which is what jQuery compares.
+	foreach ($targets as $url) {
+		t_same(0, substr_count($url, ':'), $url . ' names no scheme, so it resolves to this site');
+		t_lacks('//', $url, $url . ' names no host of its own either');
+	}
+
+	// The outside address, read out of the file rather than written out again
+	// here: it is the one call this page makes that must not carry a token.
+	$remote = '';
+	if (preg_match('/url:\s*\'((?:https?:|\/\/)[^\']+)\'/', $source, $match) === 1) {
+		$remote = $match[1];
+	}
+	t_ok($remote !== '', 'js/mc.js names an address outside this site');
+	t_contains('://', $remote, 'and names its scheme and host in full, so jQuery classifies it as leaving this site');
+	t_lacks($remote, $prefilter, 'the prefilter does not special-case that one address');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 17. The list endpoints: who may write, and what a malformed request gets
  * ---------------------------------------------------------------------------
  *
  * Everything a list endpoint refuses, it refuses before it opens a connection,
@@ -1906,10 +2123,12 @@ t_group('list endpoint guards', function () {
 	// leaves a driver error in the log and any request that does not, does not.
 	$fixture = mcm_fixture('list-guards', array('config' => array('DB_HOST' => '127.0.0.1;port=1')));
 	$owner   = 'f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1';
-	mcm_seed_session($fixture, $owner, array('user_name' => 'list-owner', 'user_id' => 3, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $owner, array('user_name' => 'list-owner', 'user_id' => 3, 'user_logged_in' => 1));
 
 	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
 	$bad_request  = '{"error":"bad_request","message":"The request could not be processed."}';
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$wrong_method = '{"error":"method_not_allowed","message":"That request method is not allowed here."}';
 
 	$server = mcm_server_start($fixture);
 	try {
@@ -1945,8 +2164,58 @@ t_group('list endpoint guards', function () {
 			t_lacks('SQLSTATE', $response['log'], 'delete_list.php never reaches the database for ' . $description);
 		}
 
+		/* 1b. Not a POST, and no token. Both are refused, and both are refused
+		 * before the connection, so a fixture with no database still answers
+		 * "and it changed nothing" for every one of them. The requests are
+		 * otherwise complete and come from a session that owns nothing yet only
+		 * because ownership needs a database; what stops them is earlier. */
+		foreach ($mutations as $page => $fields) {
+			// A GET carrying everything, token included, is still not a POST.
+			$response = mcm_http($server, '/' . $page . '?' . http_build_query($fields), mcm_session_headers($owner));
+
+			t_same(405, $response['status'], $page . ' refuses a GET');
+			t_same($wrong_method, $response['body'], $page . ' answers a GET with the fixed body');
+			t_contains('POST', implode('', mcm_header_values($response, 'Allow')), $page . ' says which method it does allow');
+			t_lacks('greatsuccess', $response['body'], $page . ' does not tell a GET it worked');
+			t_lacks('movie_list_id:', $response['body'], $page . ' hands a GET no identifier');
+			t_contains('is not allowed here', $response['log'], $page . ': the refused method is logged');
+			t_lacks('SQLSTATE', $response['log'], $page . ' never reaches the database for a GET');
+
+			// A POST from the same session, without the token it was given.
+			$tokenless = array(
+				'no token at all'            => array(),
+				'an empty token'             => array('csrf_token' => ''),
+				"another session's token"    => array('csrf_token' => str_repeat('9', 64)),
+				'a token that is almost right' => array('csrf_token' => substr(mcm_session_token($owner), 0, 63) . 'z'),
+			);
+			foreach ($tokenless as $description => $extra) {
+				$response = mcm_http_post($server, '/' . $page, $fields + $extra, array('Cookie: PHPSESSID=' . $owner));
+
+				t_same(403, $response['status'], $page . ' refuses a POST with ' . $description);
+				t_same($forbidden, $response['body'], $page . ' answers ' . $description . ' with the fixed body');
+				t_lacks('greatsuccess', $response['body'], $page . ' does not tell ' . $description . ' it worked');
+				t_lacks('movie_list_id:', $response['body'], $page . ' hands ' . $description . ' no identifier');
+				t_contains('no valid CSRF token', $response['log'], $page . ': the reason is logged for ' . $description);
+				t_lacks('SQLSTATE', $response['log'], $page . ' never reaches the database for ' . $description);
+			}
+
+			// The token is a credential and never goes to the log, however it
+			// arrived and however wrong it was.
+			t_lacks(mcm_session_token($owner), $response['log'], $page . ": the session's own token is never logged");
+		}
+
+		// The token may also travel as a form field, which is what a page that
+		// posts a form rather than an AJAX request would send.
+		$response = mcm_http_post($server, '/create_list.php', array(
+			'list_name'  => 'first',
+			'list_rank'  => 0,
+			'csrf_token' => mcm_session_token($owner),
+		), array('Cookie: PHPSESSID=' . $owner));
+		t_lacks($forbidden, $response['body'], 'a token in the form field is accepted too');
+		t_contains('SQLSTATE', $response['log'], 'a token in the form field gets the request as far as the database');
+
 		/* 2. Signed in, but the request is not the shape the page sends. */
-		$cookie    = array('Cookie: PHPSESSID=' . $owner);
+		$cookie    = mcm_session_headers($owner);
 		$malformed = array(
 			'a rank that is not a number' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'ok', 'list_rank' => 'abc'), 'logged' => 'not a position'),
 			'a rank past the width of the column' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'ok', 'list_rank' => 256), 'logged' => 'not a position'),
@@ -2005,7 +2274,7 @@ t_group('list endpoint guards', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 17. The optional real-server database group
+ * 18. The optional real-server database group
  * ---------------------------------------------------------------------------
  *
  * Everything above needs a PHP CLI and nothing else, and still does. This group
@@ -2288,7 +2557,7 @@ t_group('real database', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 18. The three actors a list mutation has to tell apart
+ * 19. The three actors a list mutation has to tell apart
  * ---------------------------------------------------------------------------
  *
  * The group above proves that an anonymous or malformed request never reaches a
@@ -2326,14 +2595,17 @@ t_group('real database: list ownership', function () {
 	// is what the endpoints do with a session, not how one is issued.
 	$owner_session = '11112222333344445555666677778888';
 	$other_session = '88887777666655554444333322221111';
-	mcm_seed_session($fixture, $owner_session, array('user_name' => 'listowner', 'user_id' => $owner_id, 'user_logged_in' => 1));
-	mcm_seed_session($fixture, $other_session, array('user_name' => 'otherowner', 'user_id' => $other_id, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $owner_session, array('user_name' => 'listowner', 'user_id' => $owner_id, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $other_session, array('user_name' => 'otherowner', 'user_id' => $other_id, 'user_logged_in' => 1));
 
-	$owner_cookie = array('Cookie: PHPSESSID=' . $owner_session);
-	$other_cookie = array('Cookie: PHPSESSID=' . $other_session);
+	// Cookie and token together: what a browser sends once the page it is on
+	// has been served by this site.
+	$owner_cookie = mcm_session_headers($owner_session);
+	$other_cookie = mcm_session_headers($other_session);
 
 	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
 	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$wrong_method = '{"error":"method_not_allowed","message":"That request method is not allowed here."}';
 
 	// Two lists for the owner and one for everybody else, each with a movie in
 	// it, so a deletion has something of its own to take with it.
@@ -2422,6 +2694,77 @@ t_group('real database: list ownership', function () {
 		t_same(403, $response['status'], 'a share that reaches somebody else\'s list is refused');
 		t_same($other_state, mcm_db_list_state($pdo, $other_id), 'a refused share left the caller\'s own list unshared');
 		t_same($owner_state, mcm_db_list_state($pdo, $owner_id), 'a refused share left the owner\'s list unshared');
+
+		/* 2b. The owner, asking the wrong way --------------------------------- */
+
+		// These are the cases the rest of the suite cannot make: the caller owns
+		// every list named, so nothing but the method and the token stands
+		// between the request and a real write. Each one is checked against the
+		// rows on both sides, because a refusal that has already written is
+		// still a refusal from the outside.
+		$owner_token = mcm_session_token($owner_session);
+		$wrong_ways  = array(
+			'a GET' => array(
+				'method'  => 'GET',
+				'headers' => $owner_cookie,
+				'status'  => 405,
+				'body'    => $wrong_method,
+				'logged'  => 'is not allowed here',
+			),
+			'a POST with no token' => array(
+				'method'  => 'POST',
+				'headers' => array('Cookie: PHPSESSID=' . $owner_session),
+				'status'  => 403,
+				'body'    => $forbidden,
+				'logged'  => 'no valid CSRF token',
+			),
+			"a POST carrying another session's token" => array(
+				'method'  => 'POST',
+				'headers' => array('Cookie: PHPSESSID=' . $owner_session, 'X-CSRF-Token: ' . mcm_session_token($other_session)),
+				'status'  => 403,
+				'body'    => $forbidden,
+				'logged'  => 'no valid CSRF token',
+			),
+			'a POST whose token is one character out' => array(
+				'method'  => 'POST',
+				'headers' => array('Cookie: PHPSESSID=' . $owner_session, 'X-CSRF-Token: ' . substr($owner_token, 0, 63) . ($owner_token[63] === 'f' ? 'e' : 'f')),
+				'status'  => 403,
+				'body'    => $forbidden,
+				'logged'  => 'no valid CSRF token',
+			),
+		);
+		// Every write this endpoint set has, aimed at lists the caller owns.
+		$owned = array(
+			'create_list.php' => array('list_name' => 'a list nobody asked for', 'list_rank' => 4),
+			'rename_list.php' => array('movie_list_id' => $first, 'list_name' => 'renamed the wrong way'),
+			'delete_list.php' => array('movie_list_id' => $first),
+			'adjust_lists.php' => array('stop_state' => json_encode(array($second, $first)), 'start_pos' => 0, 'stop_pos' => 1),
+			'share_lists.php' => array('changed_lists' => json_encode(array($first)), 'share_vals' => '[1]'),
+		);
+		foreach ($wrong_ways as $description => $way) {
+			foreach ($owned as $page => $fields) {
+				$before = mcm_db_list_state($pdo, $owner_id);
+				if ($way['method'] === 'GET') {
+					$response = mcm_http($server_handle, '/' . $page . '?' . http_build_query($fields), $way['headers']);
+				} else {
+					$response = mcm_http_post($server_handle, '/' . $page, $fields, $way['headers']);
+				}
+
+				t_same($way['status'], $response['status'], $page . ' refuses ' . $description . ' from the owner');
+				t_same($way['body'], $response['body'], $page . ' answers ' . $description . ' with the fixed body');
+				t_lacks('greatsuccess', $response['body'], $page . ' does not tell ' . $description . ' it worked');
+				t_lacks('movie_list_id:', $response['body'], $page . ' hands ' . $description . ' no identifier');
+				t_contains($way['logged'], $response['log'], $page . ': the reason is logged for ' . $description);
+				t_same($before, mcm_db_list_state($pdo, $owner_id), $page . ': ' . $description . ' changed no row of the owner\'s');
+				t_same($other_state, mcm_db_list_state($pdo, $other_id), $page . ': ' . $description . ' changed nobody else\'s rows either');
+			}
+			// A creation would not show in the state of the lists that already
+			// exist, so it is counted separately.
+			t_same(2, count(mcm_db_list_state($pdo, $owner_id)), 'no list was created by ' . $description);
+			t_same(1, mcm_db_movie_count($pdo, $first), 'no movie was deleted by ' . $description);
+		}
+		// However wrong the token was, it never reaches the log.
+		t_lacks($owner_token, $response['log'], "the owner's own token is never logged");
 
 		/* 3. The owner, doing all of it --------------------------------------- */
 
@@ -2525,7 +2868,7 @@ t_group('real database: list ownership', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 19. Escaping what the server renders
+ * 20. Escaping what the server renders
  * ---------------------------------------------------------------------------
  */
 
@@ -2697,7 +3040,7 @@ t_group('output escaping', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 20. Bounded validation of a submitted list name
+ * 21. Bounded validation of a submitted list name
  * ---------------------------------------------------------------------------
  */
 
@@ -2726,18 +3069,22 @@ t_group('list name validation', function () {
 	}
 
 	// The two pages that write a list name run that validation before they touch
-	// the database, so the refusal is observable without one. Both refuse an
-	// anonymous request before that, so these run as a signed-in user.
+	// the database, so the refusal is observable without one. Both refuse a
+	// request that is not a signed-in POST carrying this session's token before
+	// that, so these are exactly that kind of request.
 	$signed_in = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
-	mcm_seed_session($fixture, $signed_in, array('user_name' => 'name-user', 'user_id' => 5, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $signed_in, array('user_name' => 'name-user', 'user_id' => 5, 'user_logged_in' => 1));
 
 	$server = mcm_server_start($fixture);
 	try {
-		$long   = str_repeat('a', 65);
-		$cookie = array('Cookie: PHPSESSID=' . $signed_in);
-		foreach (array('create_list.php?list_rank=0&list_name=', 'rename_list.php?movie_list_id=1&list_name=') as $path) {
-			$page     = substr($path, 0, strpos($path, '?'));
-			$response = mcm_http($server, '/' . $path . rawurlencode($long), $cookie);
+		$long    = str_repeat('a', 65);
+		$headers = mcm_session_headers($signed_in);
+		$pages   = array(
+			'create_list.php' => array('list_rank' => 0),
+			'rename_list.php' => array('movie_list_id' => 1),
+		);
+		foreach ($pages as $page => $fields) {
+			$response = mcm_http_post($server, '/' . $page, $fields + array('list_name' => $long), $headers);
 
 			t_same(200, $response['status'], $page . ' answers a name that is too long');
 			t_same('Error: List name is longer than 64 characters.', $response['body'], $page . ' refuses a name that is too long');
@@ -2745,7 +3092,7 @@ t_group('list name validation', function () {
 
 			// A name full of markup is not what validation is for: it goes
 			// through, and gets as far as the database this fixture has none of.
-			$response = mcm_http($server, '/' . $path . rawurlencode('<script>alert(1)</script>'), $cookie);
+			$response = mcm_http_post($server, '/' . $page, $fields + array('list_name' => '<script>alert(1)</script>'), $headers);
 			t_lacks('Error: List name', $response['body'], $page . ' stores a name containing markup rather than refusing it');
 			t_contains('mcm', $response['log'], $page . ' got past validation and on to the database');
 		}
@@ -2774,7 +3121,7 @@ t_group('list name validation', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 21. The baseline headers every response carries
+ * 22. The baseline headers every response carries
  * ---------------------------------------------------------------------------
  */
 
@@ -2953,7 +3300,7 @@ t_group('security headers', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 22. The attributes on a cookie that is not the session cookie
+ * 23. The attributes on a cookie that is not the session cookie
  * ---------------------------------------------------------------------------
  */
 
@@ -3028,7 +3375,7 @@ t_group('cookie hardening', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 23. Who may add, delete, move and import movies
+ * 24. Who may add, delete, move and import movies
  * ---------------------------------------------------------------------------
  *
  * The four movie mutation endpoints are the first to adopt the shared guards,
@@ -3054,10 +3401,13 @@ t_group('movie endpoints refuse before the database', function () {
 
 	$signed_in  = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
 	$signed_out = 'e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2';
-	mcm_seed_session($fixture, $signed_in, array('user_name' => 'signed-in-user', 'user_id' => 7, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $signed_in, array('user_name' => 'signed-in-user', 'user_id' => 7, 'user_logged_in' => 1));
 	mcm_seed_session($fixture, $signed_out, array('user_name' => 'signed-out-user', 'user_logged_in' => 0));
 
+	$as_signed_in = mcm_session_headers($signed_in);
 	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$wrong_method = '{"error":"method_not_allowed","message":"That request method is not allowed here."}';
 
 	// A complete, well-formed request for each endpoint, so that nothing is
 	// refused for a missing parameter and the refusal under test is the only
@@ -3098,17 +3448,34 @@ t_group('movie endpoints refuse before the database', function () {
 				t_lacks('Database error', $response['log'], $page . ' stops ' . $description . ' before it reaches the database');
 			}
 
-			// The same refusal off the POST path. Making these endpoints
-			// POST-only is a separate change; until it lands, a GET must not be
-			// the way around the guard.
-			$response = mcm_http($server, '/' . $page . '?' . http_build_query($fields));
-			t_same(401, $response['status'], $page . ' refuses an unauthenticated GET too');
-			t_lacks('Database error', $response['log'], $page . ' stops an unauthenticated GET before it reaches the database');
+			// A GET is not a way around any of this. It is refused on the
+			// method alone, before the session is even consulted, so the
+			// answer is the same whether or not anybody is signed in behind it
+			// and whether or not it carries a token.
+			foreach (array('an unauthenticated' => array(), "the owner's" => $as_signed_in) as $whose => $headers) {
+				$response = mcm_http($server, '/' . $page . '?' . http_build_query($fields), $headers);
 
-			// A signed-in visitor gets past the login guard and on to the
-			// database, which is where the question of whose list this is has
-			// to be settled. Here that connection is the one that fails.
+				t_same(405, $response['status'], $page . ' refuses ' . $whose . ' GET');
+				t_same($wrong_method, $response['body'], $page . ' answers ' . $whose . ' GET with the shared fixed body');
+				t_contains('POST', implode('', mcm_header_values($response, 'Allow')), $page . ' says which method it does allow');
+				t_lacks('Database error', $response['log'], $page . ' stops ' . $whose . ' GET before it reaches the database');
+			}
+
+			// A signed-in POST with no token gets no further. The connection is
+			// opened after the token is checked, so this too leaves no driver
+			// error behind - which is what says nothing could have been written.
 			$response = mcm_http_post($server, '/' . $page, $fields, array('Cookie: PHPSESSID=' . $signed_in));
+
+			t_same(403, $response['status'], $page . ' refuses a signed-in request with no token');
+			t_same($forbidden, $response['body'], $page . ' answers a request with no token with the shared fixed body');
+			t_contains('no valid CSRF token', $response['log'], $page . ' logs why it refused a request with no token');
+			t_lacks('Database error', $response['log'], $page . ' stops a request with no token before it reaches the database');
+
+			// A signed-in visitor whose request carries the token gets past all
+			// three guards and on to the database, which is where the question
+			// of whose list this is has to be settled. Here that connection is
+			// the one that fails.
+			$response = mcm_http_post($server, '/' . $page, $fields, $as_signed_in);
 
 			t_same(500, $response['status'], $page . ' lets a signed-in visitor through to the database');
 			t_same(mcm_generic_message(), $response['body'], $page . ' gives the generic message when the database is down');
@@ -3122,7 +3489,7 @@ t_group('movie endpoints refuse before the database', function () {
 		// request nor an authenticated one reaches TMDb before the list it
 		// would write into has been settled.
 		$tmdb = array('movie_list_id' => 11, 'tmdb_list_id' => '5212934a760ee36af148407c');
-		foreach (array('an anonymous' => array(), 'a signed-in' => array('Cookie: PHPSESSID=' . $signed_in)) as $description => $headers) {
+		foreach (array('an anonymous' => array(), 'a signed-in' => $as_signed_in) as $description => $headers) {
 			$response = mcm_http_post($server, '/import_list.php', $tmdb, $headers);
 			t_lacks('Method failed', $response['log'], $description . ' import contacts nothing outside this site');
 			t_lacks('themoviedb', $response['log'], $description . ' import names no external service in the log');
@@ -3162,7 +3529,7 @@ t_group('import_list.php source checks of last resort', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 24. The movie authorization matrix, over real rows
+ * 25. The movie authorization matrix, over real rows
  * ---------------------------------------------------------------------------
  *
  * Who owns which list is a question only a database can answer, so this is the
@@ -3208,14 +3575,17 @@ t_group('movie ownership over a real database', function () {
 
 	$alice_session = 'f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1';
 	$bob_session   = 'f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2';
-	mcm_seed_session($fixture, $alice_session, array('user_name' => 'alice', 'user_id' => $alice, 'user_logged_in' => 1));
-	mcm_seed_session($fixture, $bob_session, array('user_name' => 'bob', 'user_id' => $bob, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $alice_session, array('user_name' => 'alice', 'user_id' => $alice, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $bob_session, array('user_name' => 'bob', 'user_id' => $bob, 'user_logged_in' => 1));
 
-	$as_alice = array('Cookie: PHPSESSID=' . $alice_session);
-	$as_bob   = array('Cookie: PHPSESSID=' . $bob_session);
+	// Cookie and token together, as a browser on a page this site served sends
+	// them.
+	$as_alice = mcm_session_headers($alice_session);
+	$as_bob   = mcm_session_headers($bob_session);
 
 	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
 	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$wrong_method = '{"error":"method_not_allowed","message":"That request method is not allowed here."}';
 
 	// Everything a refused request must leave alone: which film is in which
 	// list and under which row id, the shared master list an add writes to, and
@@ -3280,10 +3650,8 @@ t_group('movie ownership over a real database', function () {
 			t_same($before, call_user_func($state), $description . ' changes nothing at all');
 		}
 
-		// The owner's own list still works, and answers what it always did. This
-		// request also carries no CSRF token, which is not yet required: making
-		// it required is separate work with its own issue, and this is the
-		// behavioural evidence that will fail once it lands.
+		// The owner's own list still works, and answers what it always did, now
+		// that the request carries the session's token as well as its cookie.
 		$before   = call_user_func($state);
 		$response = mcm_http_post($server_handle, '/add_movie.php', array('movie_list_id' => $alice_two) + $new_film, $as_alice);
 
@@ -3337,16 +3705,41 @@ t_group('movie ownership over a real database', function () {
 		t_lacks($alice_row . '|' . $alice_one . '|101', implode("\n", $after['movies']), 'the row she deleted is the one that went');
 		t_contains($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), "the other account's rows are untouched");
 
-		// A GET is not yet refused for these endpoints either - method
-		// enforcement is the same separate issue as the CSRF requirement above -
-		// so the owner's mutation goes through that way too.
+		// The same delete as a GET, by the account that owns the list and with
+		// its token in hand, is refused on the method alone - and the row it
+		// named is still there afterwards.
 		$before   = call_user_func($state);
 		$response = mcm_http($server_handle, '/delete_movie.php?' . http_build_query(array('movie_list_id' => $bob_one, 'tmdb_movie_id' => 102)), $as_bob);
 		$after    = call_user_func($state);
 
-		t_contains('greatsuccess', $response['body'], "the owner's GET still performs the delete");
-		t_same(count($before['movies']) - 1, count($after['movies']), 'the GET delete removes exactly one row');
-		t_lacks($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), 'the row named in the GET is the one that went');
+		t_same(405, $response['status'], "the owner's GET is refused");
+		t_same($wrong_method, $response['body'], "the owner's GET gets the shared fixed body");
+		t_lacks('greatsuccess', $response['body'], "the owner's GET is not told the delete worked");
+		t_same($before, $after, "the owner's GET deleted nothing");
+		t_contains($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), 'the row named in the GET is still there');
+
+		// And the same delete as a POST with no token: refused, and the row
+		// stays where it is. This is the pair the acceptance criterion asks for
+		// - what the client was told, and what the table holds afterwards - on
+		// a request that would otherwise have been allowed in full.
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/delete_movie.php', array('movie_list_id' => $bob_one, 'tmdb_movie_id' => 102), array('Cookie: PHPSESSID=' . $bob_session));
+		$after    = call_user_func($state);
+
+		t_same(403, $response['status'], "the owner's POST with no token is refused");
+		t_same($forbidden, $response['body'], "the owner's tokenless POST gets the shared fixed body");
+		t_same($before, $after, "the owner's tokenless POST deleted nothing");
+		t_contains('no valid CSRF token', $response['log'], 'the reason the tokenless POST was refused is logged');
+		t_lacks(mcm_session_token($bob_session), $response['log'], 'the token itself is never logged');
+
+		// With the token, the same request does what it always did.
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/delete_movie.php', array('movie_list_id' => $bob_one, 'tmdb_movie_id' => 102), $as_bob);
+		$after    = call_user_func($state);
+
+		t_contains('greatsuccess', $response['body'], "the owner's POST with the token performs the delete");
+		t_same(count($before['movies']) - 1, count($after['movies']), 'the delete removes exactly one row');
+		t_lacks($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), 'the row named in the request is the one that went');
 
 		/* Moving ------------------------------------------------------------ */
 
@@ -3445,7 +3838,7 @@ t_group('movie ownership over a real database', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 25. What the browser scripts build out of a value
+ * 26. What the browser scripts build out of a value
  * ---------------------------------------------------------------------------
  */
 

@@ -4,15 +4,18 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Nobody creates a list on somebody else's behalf. This runs before anything is
-// read, so an anonymous request never reaches a query at all.
+// Nobody creates a list on somebody else's behalf, and nobody creates one from a
+// page this site did not hand out. All three run before anything is read, so a
+// request that fails any of them never reaches a query at all.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 $user_id = mcm_current_user_id();
 
 // Kill the script if someone got here improperly
-$list_name = (isset($_POST['list_name'])) ? $_POST['list_name'] : ((isset($_GET['list_name'])) ? $_GET['list_name'] : '');
-$list_description = (isset($_POST['list_description'])) ? $_POST['list_description'] : ((isset($_GET['list_description'])) ? $_GET['list_description'] : '');
-$list_rank_submitted = (isset($_POST['list_rank'])) ? $_POST['list_rank'] : ((isset($_GET['list_rank'])) ? $_GET['list_rank'] : '');
+$list_name = isset($_POST['list_name']) ? $_POST['list_name'] : '';
+$list_description = isset($_POST['list_description']) ? $_POST['list_description'] : '';
+$list_rank_submitted = isset($_POST['list_rank']) ? $_POST['list_rank'] : '';
 
 // Bounded validation of the submitted name, before anything is stored. It only
 // rejects; it never rewrites what was typed, and names already in the database
