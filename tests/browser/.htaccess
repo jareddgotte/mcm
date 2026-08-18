@@ -1,0 +1,13 @@
+# The page in this directory is a developer tool: it renders deliberately
+# hostile values through the site's own scripts to show that they end up as
+# text. Nothing serves it - it is opened from a checkout - so a deployed copy
+# stays unreachable over HTTP.
+# Both directive sets are present because the server's Apache version is not
+# known: 2.4+ uses mod_authz_core, older releases use mod_access_compat.
+<IfModule mod_authz_core.c>
+	Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+	Order allow,deny
+	Deny from all
+</IfModule>

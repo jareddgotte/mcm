@@ -1,7 +1,14 @@
 var alertNum = 0
+// The message is content rather than markup: a string is shown as text, and a
+// caller that wants an element in the middle of its wording - the <abbr> naming
+// a movie or a list - passes the element itself. See js/dom.js.
 function displayAlert (msg, color, timeout) {
 	if (timeout === undefined) timeout = 5000
-	$('#main-alerts').append('<div class="alert alert-' + color + '" id="alert' + alertNum + '"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>' + msg + '</div>')
+	var $alert = $('<div>')
+		.addClass('alert alert-' + color)
+		.attr('id', 'alert' + alertNum)
+		.append($('<button>').addClass('close').attr({ type: 'button', 'data-dismiss': 'alert', 'aria-hidden': 'true' }).text('\u00d7'))
+	$('#main-alerts').append(mcmAppend($alert, msg))
 	if (timeout >= 0) {
 		var tmp = alertNum
 		window.setTimeout(function () { $('#alert' + tmp).hide(400, function () { this.remove() }) }, timeout)
@@ -53,19 +60,19 @@ function displayTable () {
 	$('#' + currentSort).parent().addClass('alert-info disabled')
 	$('#' + currentOrder).parent().addClass('alert-info disabled')
 
-	// Create the HTML we are going to use as our table of movies
-	html = '<div class="posters">'
-	if (ListItemsJSON.length === 0) html += '<div class="alert alert-info" style="margin: 0 6px;"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" above.</div>'
+	// Build the table of movies as elements: a title that looks like markup is
+	// still only a title, so it goes in as an attribute rather than as tags.
+	var $posters = $('<div>').addClass('posters')
+	if (ListItemsJSON.length === 0) $posters.append('<div class="alert alert-info" style="margin: 0 6px;"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button>Your list is currently empty.  Add a movie by typing a movie\'s title where you see "Add a Movie" above.</div>')
 	else {
 		$.each(ListItemsJSON, function (i, v) {
 			if (v.poster_path !== null) {
-				html += '<img class="lazy img-thumbnail" id="' + v.movie_id + '" data-original="' + base_url + poster_size_big + v.poster_path + '" alt="' + v.title + "\">"
+				$posters.append(mcmPosterImage(v, base_url, poster_size_big))
 			}
 		})
 	}
-	html += '</div>'
 	//console.log(currentList)
-	$('#' + currentList).html(html) // Set that HTML now
+	$('#' + currentList).empty().append($posters) // Put that table in place now
 	
 	$('.tab-pane img:first-child').bind('transitionend webkitTransitionEnd oTransitionEnd', function(e) {
 		if (e.originalEvent.propertyName === 'width') {
@@ -121,8 +128,8 @@ function checkSortOrder (cName) {
 function createList (list_name, list_id) {
 	$('#welcome-alert').remove()
 	window.location.hash = 'list-' + list_id
-	$('#list-tabs').append('<li data-listid="' + list_id + '"><a href="#' + list_id + '" data-toggle="pill">' + list_name + '</a></li>')
-	$('#list-containers').append('<div class="tab-pane" id="' + list_id + '"></div>')
+	$('#list-tabs').append(mcmListTab(list_id, list_name))
+	$('#list-containers').append(mcmListPane(list_id))
 	db.push({ display_log: 0, list_description: '', list_id: list_id*1, list_name: list_name, movie_details: []}) // list_id is multiplied by 1 to become an int
 	currentList = list_id
 	//console.log('createList: ' + currentList)
@@ -150,7 +157,7 @@ function deleteList (list_id) {
 function renameList (list_id, list_name) {
 	var pos = listPos(list_id)
 	db[pos].list_name = list_name
-	$('#list-tabs li:nth-child(' + (+pos + 2) + ') a').html(list_name)
+	$('#list-tabs li:nth-child(' + (+pos + 2) + ') a').text(list_name)
 }
 
 function adjustLists (stop_state) {
@@ -162,8 +169,8 @@ function adjustLists (stop_state) {
 	$('#list-tabs').children().each(function (i, e) { if (i !== 0) $(e).remove() }) // this removes every list tab while leaving the TabDrop <li> in place so the plugin will still work after adjusting the lists
 	$('#list-containers').empty()
 	$.each(db, function (i, e) {
-		$('#list-tabs').append('<li data-listid="' + e.list_id + '"><a href="#' + e.list_id + '" data-toggle="pill">' + e.list_name + '</a></li>')
-		$('#list-containers').append('<div class="tab-pane" id="' + e.list_id + '"></div>')
+		$('#list-tabs').append(mcmListTab(e.list_id, e.list_name))
+		$('#list-containers').append(mcmListPane(e.list_id))
 	})
 	$.each(db, function () { this.display_log = 0 })
 	
@@ -286,7 +293,7 @@ function enableAddMovie (template) {
 	,	displayKey: 'tmdb_title'
 	,	source: taAddMovie.ttAdapter()
 	,	templates: {
-			suggestion: Handlebars.compile(template)
+			suggestion: template
 		}
 	})
 	
@@ -315,7 +322,7 @@ function enableAddMovie (template) {
 			//}
 			switch (code) {
 				case 1:
-					displayAlert('Successfully added <abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">movie</abbr>!', 'success')
+					displayAlert(['Successfully added ', mcmAbbr(o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')', 'movie'), '!'], 'success')
 					addMovie(currentList, o.tmdb_movie_id, o.tmdb_title, o.tmdb_original_title, o.tmdb_poster_path, o.tmdb_release_date)
 					db[currentListPos].display_log = 0
 					displayTable()
@@ -323,7 +330,7 @@ function enableAddMovie (template) {
 					enableSearchCollection(template)
 					break
 				case 2:
-					displayAlert('<abbr title="' + o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')">Movie</abbr> already exists in your collection!', 'warning', 10000)
+					displayAlert([mcmAbbr(o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')', 'Movie'), ' already exists in your collection!'], 'warning', 10000)
 					break
 				default:
 					displayAlert('Something went wrong! error[' + code + ']', 'danger', 0)
@@ -357,8 +364,10 @@ function enableSearchCollection (template) {
 			,	displayKey: 'tmdb_title'
 			,	source: bhObjs[i].ttAdapter()
 			,	templates: {
-					suggestion: Handlebars.compile(template)
-				,	header: '<h4>' + e.list_name + '</h4>'
+					suggestion: template
+					// The heading names a list, so typeahead is handed the
+					// element rather than a string it would parse.
+				,	header: function () { return mcmListHeader(e.list_name) }
 				}
 			})
 		})
@@ -456,7 +465,7 @@ $(function () {
 						that.removeClass('disabled')
 						$('#rename-list_name').val('')
 						if (msg.substr(0, 12) === 'greatsuccess') {
-							displayAlert('Successfully renamed <abbr title="&quot;' + old_list_name + '&quot; to &quot;' + rename_list_name + '&quot;">list</abbr>!', 'success', 10000)
+							displayAlert(['Successfully renamed ', mcmAbbr('"' + old_list_name + '" to "' + rename_list_name + '"', 'list'), '!'], 'success', 10000)
 							renameList(currentList, rename_list_name)
 							$('#rename-dialog').modal('hide')
 						}
@@ -480,11 +489,11 @@ $(function () {
 					//console.log(msg) // Useful for debugging
 					if (msg.substr(0, 12) === 'greatsuccess') {
 						//console.log(currentList)
-						displayAlert('Successfully deleted <abbr title="&quot;' + db[currentListPos].list_name + '&quot;">list</abbr>!', 'success', 10000)
+						displayAlert(['Successfully deleted ', mcmAbbr('"' + db[currentListPos].list_name + '"', 'list'), '!'], 'success', 10000)
 						deleteList(currentList)
 					}
 					else {
-						displayAlert('Something went wrong while trying to delete your <abbr title="&quot;' + db[currentListPos].list_name + '&quot;">list</abbr>!', 'danger', 0)
+						displayAlert(['Something went wrong while trying to delete your ', mcmAbbr('"' + db[currentListPos].list_name + '"', 'list'), '!'], 'danger', 0)
 					}
 					$('#list-delete-yes').off('click')
 					$('#delete-dialog').modal('hide')
@@ -541,8 +550,10 @@ $(function () {
 		displayTable()
 	})
 
-	// This template is used for both #add-movie and #search-collection
-	var template = '<p><img class="img-thumbnail {{classed}}" src="' + base_url + 'w45{{tmdb_poster_path}}" alt="{{tmdb_title}}" width="55" height="78"><span><strong>{{tmdb_title}}</strong> <small>(<abbr title="{{tmdb_release_date}}">{{tmdb_release_date_abbr}}</abbr>)</small></span></p>'
+	// This template is used for both #add-movie and #search-collection. It
+	// builds the suggestion out of elements (see js/dom.js) instead of pasting
+	// a TMDb title into a string of markup.
+	var template = function (datum) { return mcmSuggestionMarkup(datum, base_url) }
 
 	// ADD MOVIE
 	enableAddMovie(template)
@@ -605,14 +616,8 @@ $(function () {
 								<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>\
 								<h4 class="modal-title">Adjust Lists</h4>\
 							</div>\
-							<div class="modal-body">' + (function () {
-								var ret = '<ul class="nav nav-pills nav-stacked" id="sortit">'
-								$.each(db, function (i, e) {
-									//console.log(e)
-									ret += '<li ' + ((e.list_id == currentList)? 'class="active" ' : '') + 'data-listid="' + e.list_id + '"><span class="glyphicon glyphicon-chevron-up sort-block up-btn"></span><span class="glyphicon glyphicon-chevron-down sort-block down-btn"></span><a class="" href="#">' + e.list_name + '</a></li>'
-								})
-								return ret += '</ul>'
-							})() + '\
+							<div class="modal-body">\
+								<ul class="nav nav-pills nav-stacked" id="sortit"></ul>\
 							</div>\
 							<div class="modal-footer">\
 								<button class="btn btn-default" type="button" data-dismiss="modal">Close</button>\
@@ -620,6 +625,19 @@ $(function () {
 							</div>\
 						</div><!-- /.modal-content -->\
 					</div><!-- /.modal-dialog -->')
+
+			// One row per list, built rather than pasted together: a list name
+			// is the row's text and nothing else.
+			$.each(db, function (i, e) {
+				//console.log(e)
+				var $row = $('<li>').attr('data-listid', e.list_id)
+				if (e.list_id == currentList) $row.addClass('active')
+				$row.append($('<span>').addClass('glyphicon glyphicon-chevron-up sort-block up-btn'))
+					.append($('<span>').addClass('glyphicon glyphicon-chevron-down sort-block down-btn'))
+					.append($('<a>').attr('href', '#').text(e.list_name))
+				$('#adjust-dialog #sortit').append($row)
+			})
+
 			start_state = $.map($.makeArray($('#adjust-dialog ul li')), function (v) { return $(v).attr('data-listid') })
 			//console.log(start_state)
 
@@ -682,16 +700,10 @@ $(function () {
 									<span class="input-group-btn">\
 										<button id="share-copy-button" class="btn btn-primary" type="button" data-clipboard-target="share-copy-input">Copy</button>\
 									</span>\
-									<input id="share-copy-input" type="text" class="form-control" value="' + window.location.protocol + '//' + window.location.hostname + '/mcm/share.php?id=' + user_id + '" readonly="readonly" onclick="this.select()">\
+									<input id="share-copy-input" type="text" class="form-control" readonly="readonly" onclick="this.select()">\
 								</div><!-- /input-group -->\
-								<p>By default, all of your lists are private.  If you would like to publicly share your lists, check them then save below.</p>' + (function () {
-								var ret = '<ul class="nav nav-pills nav-stacked" id="shareit">'
-								$.each(db, function (i, e) {
-									//console.log(e)
-									ret += '<li ' + ((e.list_id == currentList)? 'class="active" ' : '') + 'data-listid="' + e.list_id + '"><input type="checkbox" value="1"' + ((e.share)? ' checked' : '') + '> <a class="" href="#">' + e.list_name + '</a></li>'
-								})
-								return ret += '</ul>'
-							})() + '\
+								<p>By default, all of your lists are private.  If you would like to publicly share your lists, check them then save below.</p>\
+								<ul class="nav nav-pills nav-stacked" id="shareit"></ul>\
 							</div>\
 							<div class="modal-footer">\
 								<button class="btn btn-default" type="button" data-dismiss="modal">Close</button>\
@@ -699,6 +711,19 @@ $(function () {
 							</div>\
 						</div><!-- /.modal-content -->\
 					</div><!-- /.modal-dialog -->')
+
+			// The link and the rows carry values, so they are set on the
+			// elements rather than written into the markup above.
+			$('#share-copy-input').val(window.location.protocol + '//' + window.location.hostname + '/mcm/share.php?id=' + user_id)
+			$.each(db, function (i, e) {
+				//console.log(e)
+				var $row = $('<li>').attr('data-listid', e.list_id)
+				if (e.list_id == currentList) $row.addClass('active')
+				$row.append($('<input>').attr({ type: 'checkbox', value: '1' }).prop('checked', e.share? true : false))
+					.append(mcmText(' '))
+					.append($('<a>').attr('href', '#').text(e.list_name))
+				$('#share-dialog #shareit').append($row)
+			})
 
 			ZeroClipboard.config( { moviePath: 'js/libs/ZeroClipboard.swf' } )
 			var clip_client = new ZeroClipboard($('#share-copy-button'))
@@ -811,22 +836,31 @@ $(function () {
 		$('#overview-content-close').on('click', function () {
 			$('#overview-content').hide(400)
 		})
-		// Generate move-to-list dropdown options
-		var movie_options_html = '<li class="alert-danger"><a href="#delete">Delete</a></li>'
-		movie_options_html += '<li class="divider"></li><li class="dropdown-header">Move to...</li>'
+		// Generate move-to-list dropdown options. The fixed entries are markup
+		// this file wrote; the one per list is built, so the list name is the
+		// link's text.
+		$('#movie-options').append('<li class="alert-danger"><a href="#delete">Delete</a></li><li class="divider"></li><li class="dropdown-header">Move to...</li>')
 		$.each(db, function(i, v) {
-			movie_options_html += '<li'
-			if (list_id === v.list_id) movie_options_html += ' class="disabled"'
-			movie_options_html += '><a href="#' + v.list_id + '">' + v.list_name + '</a></li>'
+			var $option = $('<li>')
+			if (list_id === v.list_id) $option.addClass('disabled')
+			$option.append($('<a>').attr('href', '#' + v.list_id).text(v.list_name))
+			$('#movie-options').append($option)
 		})
-		$('#movie-options').append(movie_options_html)
 		// Handle movie-options option click
 		$('#movie-options a').on('click', function (e) {
 			e.preventDefault()
 			if ($(this).parent().hasClass('disabled')) return false
 			if ($(this).attr('href').substr(1) === 'delete') {
 				$('#dialog .modal-body').hide(400)
-				$('#dialog .modal-body').after('<div class="alert alert-danger" style="margin:20px" id="delete-alert"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button><p>Are you <strong>sure</strong> you want to <strong>delete</strong> this movie from your "' + db[listPos(list_id)].list_name + '" list?</p><p><button class="btn btn-danger" type="button" id="delete-yes">Yes</button> <button class="btn btn-default" type="button" id="delete-no">No, I do not want to</button></p></div>')
+				// Everything but the list name is markup this file wrote; the
+				// name itself is the question's text.
+				var $question = $('<p>')
+					.append('Are you <strong>sure</strong> you want to <strong>delete</strong> this movie from your "')
+					.append(mcmText(db[listPos(list_id)].list_name))
+					.append('" list?')
+				$('#dialog .modal-body').after($('<div class="alert alert-danger" style="margin:20px" id="delete-alert"><button type="button" class="close" data-dismiss="alert" aria-hidden="true">&times;</button></div>')
+					.append($question)
+					.append('<p><button class="btn btn-danger" type="button" id="delete-yes">Yes</button> <button class="btn btn-default" type="button" id="delete-no">No, I do not want to</button></p>'))
 				$('#delete-no').on('click', function () {
 					$('#dialog .modal-body').show(400)
 					$('#delete-alert').remove()
@@ -840,7 +874,7 @@ $(function () {
 					.done(function (msg) {
 						//console.log(msg) // Useful for debugging
 						if (msg.substr(0, 12) === 'greatsuccess') {
-							displayAlert('Successfully deleted <abbr title="' + $.grep(db[listPos(list_id)].movie_details, function (e) { if (e.movie_id === movie_id) return true })[0].original_title + '">movie</abbr>!', 'success', 10000)
+							displayAlert(['Successfully deleted ', mcmAbbr($.grep(db[listPos(list_id)].movie_details, function (e) { if (e.movie_id === movie_id) return true })[0].original_title, 'movie'), '!'], 'success', 10000)
 							//db = JSON.parse(msg.substr(12))
 							deleteMovie(list_id, movie_id)
 							$('#dialog').modal('hide')

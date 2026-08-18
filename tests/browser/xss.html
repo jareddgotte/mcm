@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>mcm - hostile values in the browser</title>
+<style>
+	body { font: 14px/1.5 monospace; margin: 20px; }
+	#summary { font-size: 20px; font-weight: bold; padding: 8px 0; }
+	.pass { color: #1a7f37; }
+	.fail { color: #b40000; }
+	#results { border-collapse: collapse; }
+	#results td { border-bottom: 1px solid #ddd; padding: 2px 10px 2px 0; vertical-align: top; }
+	#page { opacity: 0.35; margin-top: 30px; border-top: 2px solid #999; padding-top: 10px; }
+	#page img { width: 90px; }
+	/* The site's own stylesheets are not loaded here, and TabDrop reads layout:
+	   it moves every tab that wrapped onto a second line into a dropdown, which
+	   an unstyled list of block-level items makes true of all of them. One line,
+	   as a wide window gives the real page, keeps the tab strip in the shape
+	   js/mc.js addresses it in. */
+	#list-tabs { position: relative; display: flex; flex-wrap: nowrap; overflow: hidden; list-style: none; padding: 0; }
+	#list-tabs > li { flex: 0 0 auto; white-space: nowrap; max-width: 120px; overflow: hidden; }
+</style>
+</head>
+<body>
+
+<!--
+	What the collection page does with a value that looks like markup.
+
+	The suite in tests/run.php reads the two page scripts and refuses a value
+	concatenated into markup, which is a fact about the source. This page is the
+	other half: it renders a list name, a movie title, a poster path and a movie
+	identifier that are all hostile, through the real js/dom.js, js/mc.js,
+	jQuery and typeahead, and then asks the browser what it built. No server, no
+	package manager and no test framework: open the file, in a browser or over
+	any local web server, and read the summary at the top. Green is a pass.
+
+	js/share.js renders the public sharing page from the same builders in
+	js/dom.js - the posters, the suggestion and the list heading - so what is
+	proven here for the collection page covers those on the sharing page too.
+	What is not covered here is behaviour that needs the server: adding, moving
+	and deleting through the endpoints, and the movie dialog's own request.
+-->
+
+<div id="summary">running...</div>
+<table id="results"></table>
+
+<!-- The parts of inc/views/logged_in.php the scripts render into. -->
+<div id="page" class="container">
+	<!-- The strip the server rendered, through mcm_list_tab_html(); the escaping
+	     of that first render is tests/run.php's to prove. TabDrop prepends a
+	     <li> of its own to this list as soon as the page script runs. -->
+	<ul class="nav nav-pills" id="list-tabs">
+		<li data-listid="1"><a href="#1" data-toggle="pill">first list</a></li>
+		<li data-listid="2"><a href="#2" data-toggle="pill">Plain List</a></li>
+	</ul>
+	<div id="main-alerts"></div>
+	<div class="row" id="list-control">
+		<input type="text" id="add_movie" placeholder="Add a Movie">
+		<input type="text" id="search_collection" placeholder="Search My Collection">
+		<ul class="dropdown-menu" id="sort-order">
+			<li><a class="sort" href="#name" id="name">Name</a></li>
+			<li><a class="sort" href="#date" id="date">Release Date</a></li>
+			<li><a class="order" href="#asc" id="asc">Ascending</a></li>
+			<li><a class="order" href="#desc" id="desc">Descending</a></li>
+		</ul>
+		<div class="btn-group" id="list-options">
+			<ul class="dropdown-menu">
+				<li><a href="#rename">Rename List</a></li>
+				<li><a href="#import">Import List</a></li>
+				<li><a href="#delete">Delete List</a></li>
+			</ul>
+		</div>
+	</div>
+	<div class="collapse navbar-collapse" id="header-nav">
+		<ul class="nav navbar-nav">
+			<li><a href="#create">Create List</a></li>
+			<li><a href="#adjust">Adjust Lists</a></li>
+			<li><a href="#share">Share Lists</a></li>
+		</ul>
+	</div>
+	<div class="tab-content" id="list-containers">
+		<div class="tab-pane" id="1"></div>
+		<div class="tab-pane" id="2"></div>
+	</div>
+	<div class="modal fade" id="dialog" tabindex="-1" aria-hidden="true">
+		<div class="modal-dialog"><div class="modal-content">
+			<div class="modal-body"><span id="movie-id">12</span></div>
+			<div class="btn-group"><ul class="dropdown-menu" id="movie-options"></ul></div>
+		</div></div>
+	</div>
+	<div class="modal fade" id="adjust-dialog" tabindex="-1" aria-hidden="true"></div>
+	<div class="modal fade" id="share-dialog" tabindex="-1" aria-hidden="true"></div>
+	<div class="modal fade" id="rename-dialog" tabindex="-1" aria-hidden="true"><div class="modal-dialog"><div class="modal-content"><div id="rename-alerts"></div><input id="rename-list_name"><button id="rename-submit">Rename</button></div></div></div>
+	<div class="modal fade" id="import-dialog" tabindex="-1" aria-hidden="true"><div class="modal-dialog"><div class="modal-content"><div id="import-alerts"></div><input id="import-tmdb_list_id"><button id="import-submit">Import</button></div></div></div>
+	<div class="modal fade" id="delete-dialog" tabindex="-1" aria-hidden="true"><div class="modal-dialog"><div class="modal-content"><button id="list-delete-yes">Yes</button></div></div></div>
+	<div class="modal fade" id="create-dialog" tabindex="-1" aria-hidden="true"><div class="modal-dialog"><div class="modal-content"><div id="create-alerts"></div><input id="create-list_name"><button id="create-submit">Create</button></div></div></div>
+</div>
+
+<script>
+	// Anything the page manages to execute lands here, and every check below
+	// insists it is still zero.
+	window.mcmPwned = 0
+	window.mcmErrors = []
+	window.onerror = function (message) { window.mcmErrors.push(message) }
+</script>
+<script src="../../js/libs/jquery-1.10.2.min.js"></script>
+<script src="../../js/libs/bootstrap.min.js"></script>
+<script src="../../js/libs/ZeroClipboard.min.js"></script>
+<script src="../../js/bootstrap-tabdrop.js"></script>
+<script src="../../js/jquery.lazyload.min.js"></script>
+<script src="../../js/typeahead.bundle.min.js"></script>
+<script src="../../js/dom.js"></script>
+<script src="../../js/mc.js"></script>
+<script>
+	// One value that is hostile wherever it lands: it ends an attribute, opens
+	// an element with a handler of its own, and closes a script element. The
+	// "<\/" spellings are for this page's own parser and are a "</" by the time
+	// any of it is rendered.
+	var payload = '"><img src=x onerror="window.mcmPwned++"><b>bold<\/b><\/script><script>window.mcmPwned++<\/script>'
+	var renamed = 'renamed <b>' + payload
+
+	// The page's own variables, exactly as inc/views/logged_in.php writes them,
+	// with every value a list or TMDb could supply replaced by the payload.
+	var base_url = 'https://example.test/img/'
+	var poster_size_big = 'w500'
+	var poster_size_small = 'w45'
+	var user_id = 7
+	var db = [
+		{ list_id: 1, list_name: payload, list_description: '', share: 1, display_log: 0, movie_details: [
+			{ movie_id: '11' + payload, title: payload, original_title: payload, poster_path: '/hostile.jpg' + payload, release_date: '1999-03-31' }
+		,	{ movie_id: '12', title: 'Plain Movie', original_title: 'Plain Movie', poster_path: '/plain.jpg', release_date: '2001-01-01' }
+		]}
+	,	{ list_id: 2, list_name: 'Plain List', list_description: '', share: 0, display_log: 0, movie_details: [] }
+	]
+	var currentList, currentListPos
+	if (db.length > 0) {
+		currentList = db[0].list_id
+		currentListPos = listPos(currentList)
+	}
+	var currentSort = 'name'
+	var currentOrder = 'asc'
+
+	var results = []
+	function check (label, ok, detail) { results.push({ label: label, ok: !!ok, detail: detail || '' }) }
+	function checkSame (label, expected, actual) {
+		check(label, expected === actual, 'expected: ' + expected + '\nactual:   ' + actual)
+	}
+	// What must be true of every container a value was rendered into, whatever
+	// the value was.
+	function checkNoMarkup (label, selector) {
+		// TabDrop's own caret is a <b>, so the injected kind is the one with no
+		// class; the payload's other two markers cannot be confused with
+		// anything the page writes.
+		check(label + ': the value built no element of its own', $(selector).find('b:not(.caret), script, img[src="x"]').length === 0)
+		check(label + ': nothing carries an injected handler', $(selector).find('[onerror], [onmouseover]').length === 0)
+	}
+	function step (label, body) {
+		try { body() } catch (error) { check(label + ' ran', false, String(error)) }
+	}
+
+	$(function () { // registered after js/mc.js, so it runs once the page is built
+		// The posters js/mc.js has already rendered from the JSON above.
+		step('posters', function () {
+			var $posters = $('#1 .posters img')
+			checkSame('the poster count is the two movies in the list', 2, $posters.length)
+			checkSame('a hostile title is the whole alt attribute', payload, $posters.eq(0).attr('alt'))
+			checkSame('a hostile poster path is the whole data-original attribute', base_url + poster_size_big + '/hostile.jpg' + payload, $posters.eq(0).attr('data-original'))
+			checkSame('a hostile movie identifier is the whole id attribute', '11' + payload, $posters.eq(0).attr('id'))
+			checkNoMarkup('posters', '#1')
+		})
+
+		// The tab strip: one tab rendered by createList(), then renamed, then
+		// put back by adjustLists().
+		step('tabs', function () {
+			createList(payload, 3)
+			var $tab = $('#list-tabs li[data-listid="3"] a')
+			checkSame('a hostile list name is the literal text of the new tab', payload, $tab.text())
+			checkSame('the tab text is one text node', 0, $tab.children().length)
+			renameList(3, renamed)
+			checkSame('a renamed list keeps its new name as text', renamed, $('#list-tabs li[data-listid="3"] a').text())
+			adjustLists([3, 1, 2])
+			checkSame('reordering rebuilds the tab with the name as text', renamed, $('#list-tabs li[data-listid="3"] a').text())
+			checkNoMarkup('tabs', '#list-tabs')
+		})
+
+		// The alerts, in the shape js/mc.js builds them: wording of its own with
+		// an <abbr> naming the movie or the list.
+		step('alerts', function () {
+			displayAlert(['Successfully added ', mcmAbbr(payload + ' (1999)', 'movie'), '!'], 'success', -1)
+			var $abbr = $('#main-alerts abbr')
+			checkSame('a hostile title is the whole title attribute of the alert', payload + ' (1999)', $abbr.attr('title'))
+			checkSame('the alert keeps the wording around it', 'movie', $abbr.text())
+			check('the alert says what it always said', $('#main-alerts').text().indexOf('Successfully added movie!') >= 0)
+			checkNoMarkup('alerts', '#main-alerts')
+		})
+
+		// The typeahead templates, called the way typeahead calls them.
+		step('suggestions', function () {
+			var datum = { tmdb_title: payload, tmdb_movie_id: 11, tmdb_poster_path: '/hostile.jpg' + payload, tmdb_release_date: '1999-03-31', tmdb_release_date_abbr: '1999', classed: '' }
+			var $rendered = $('<div>').html(mcmSuggestionMarkup(datum, base_url))
+			checkSame('a hostile title is the text of the suggestion', payload, $rendered.find('strong').text())
+			checkSame('a hostile title is the whole alt attribute of the suggestion', payload, $rendered.find('img').attr('alt'))
+			checkSame('a hostile poster path is the whole src attribute', base_url + 'w45/hostile.jpg' + payload, $rendered.find('img').attr('src'))
+			checkSame('the release year still sits in its abbreviation', '1999', $rendered.find('abbr').text())
+			checkNoMarkup('suggestions', $rendered)
+
+			var $header = mcmListHeader(payload)
+			checkSame('a hostile list name is the text of the suggestion heading', payload, $header.text())
+			checkSame('the heading text is one text node', 0, $header.children().length)
+		})
+
+		// The two dialogs that list every list by name.
+		step('adjust dialog', function () {
+			$('#header-nav a[href="#adjust"]').click()
+			var $rows = $('#adjust-dialog #sortit li')
+			checkSame('the adjust dialog lists every list', db.length, $rows.length)
+			checkSame('a hostile list name is the row text', renamed, $rows.eq(0).find('a').text())
+			checkSame('the row keeps its identifier as an attribute', '3', $rows.eq(0).attr('data-listid'))
+			checkSame('the row keeps both move buttons', 2, $rows.eq(0).find('span.sort-block').length)
+			checkNoMarkup('adjust dialog', '#adjust-dialog')
+		})
+
+		step('share dialog', function () {
+			$('#header-nav a[href="#share"]').click()
+			var $rows = $('#share-dialog #shareit li')
+			checkSame('the share dialog lists every list', db.length, $rows.length)
+			checkSame('a hostile list name is the row text', renamed, $rows.eq(0).find('a').text())
+			checkSame('a shared list is still checked', true, $rows.eq(1).find('input').prop('checked'))
+			check('the share link is still the one the page builds', $('#share-copy-input').val().indexOf('/mcm/share.php?id=7') > 0)
+			checkNoMarkup('share dialog', '#share-dialog')
+		})
+
+		// The movie dialog: the move-to-list menu, and the confirmation that
+		// names the list the movie would be deleted from.
+		step('movie dialog', function () {
+			$('#dialog').trigger('loaded.bs.modal')
+			var $options = $('#movie-options li')
+			checkSame('the menu holds the fixed entries and one per list', 3 + db.length, $options.length)
+			checkSame('a hostile list name is the text of its menu entry', renamed, $options.eq(3).find('a').text())
+			checkSame('the menu entry links to the list identifier', '#3', $options.eq(3).find('a').attr('href'))
+			checkNoMarkup('movie dialog', '#movie-options')
+
+			$('#movie-options a[href="#delete"]').click()
+			check('the confirmation names the list it would delete from', $('#delete-alert').text().indexOf('from your "' + payload + '" list?') >= 0)
+			checkSame('the confirmation still emphasises the two words it always did', 2, $('#delete-alert strong').length)
+			check('the confirmation still offers both answers', $('#delete-yes').length === 1 && $('#delete-no').length === 1)
+			checkNoMarkup('movie dialog confirmation', '#delete-alert')
+		})
+
+		// Whatever the checks above made of it, nothing ran and nothing failed.
+		check('the payload never executed', window.mcmPwned === 0, 'it ran ' + window.mcmPwned + ' time(s)')
+		check('no script on the page failed', window.mcmErrors.length === 0, window.mcmErrors.join('\n'))
+		check('the document holds no element the payload asked for', $('#page').find('img[src="x"], b:not(.caret), script').length === 0)
+
+		// Report.
+		var failed = 0
+		var $table = $('#results')
+		$.each(results, function (i, result) {
+			if (!result.ok) failed++
+			$table.append($('<tr>')
+				.append($('<td>').addClass(result.ok ? 'pass' : 'fail').text(result.ok ? 'ok' : 'FAIL'))
+				.append($('<td>').text(result.label))
+				.append($('<td>').text(result.ok ? '' : result.detail)))
+		})
+		var summary = (failed === 0 ? 'PASS' : 'FAIL') + ': ' + (results.length - failed) + ' of ' + results.length + ' checks passed'
+		$('#summary').addClass(failed === 0 ? 'pass' : 'fail').text(summary)
+		document.title = summary
+	})
+</script>
+
+</body>
+</html>

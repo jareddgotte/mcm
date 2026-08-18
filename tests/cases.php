@@ -3442,3 +3442,141 @@ t_group('movie ownership over a real database', function () {
 	}
 	mcm_server_stop($server_handle);
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * 25. What the browser scripts build out of a value
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('browser rendering', function () {
+	// The scripts this project writes. The vendored libraries are excluded on
+	// purpose, and naming the set here is what makes a new script a decision
+	// rather than an omission.
+	$scripts = array();
+	foreach (mcm_browser_sources(MCM_REPO_ROOT) as $file) {
+		$scripts[] = substr($file, strlen(MCM_REPO_ROOT) + 1);
+	}
+	t_same(array('js/dom.js', 'js/mc.js', 'js/nav.js', 'js/share.js'), $scripts, "the checks cover this project's own browser scripts");
+
+	foreach (mcm_browser_sources(MCM_REPO_ROOT) as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		t_same(array(), mcm_js_markup_problems($file), $name . ' joins no value to markup');
+		t_same(array(), mcm_js_html_assignments($file), $name . ' hands .html() nothing but markup of its own');
+		t_same(array(), mcm_js_regex_literals($file), $name . ' has no regular expression literal, the one thing the scanner cannot read');
+		t_lacks('document.write', file_get_contents($file), $name . ' writes nothing into the document as it is parsed');
+	}
+
+	// Both page scripts render the same three things, and render them from the
+	// one file that knows how, so a change to any of it has one place to happen
+	// in - the arrangement inc/bootstrap.php already has for the server side.
+	foreach (array('js/mc.js', 'js/share.js') as $script) {
+		$source = file_get_contents(MCM_REPO_ROOT . '/' . $script);
+		t_contains('mcmPosterImage(', $source, $script . ' renders posters through the shared builder');
+		t_contains('mcmSuggestionMarkup(', $source, $script . ' renders typeahead suggestions through the shared builder');
+		t_contains('mcmListHeader(', $source, $script . ' renders the suggestion heading through the shared builder');
+		t_lacks('Handlebars', $source, $script . ' compiles no string template');
+	}
+
+	$builders = file_get_contents(MCM_REPO_ROOT . '/js/dom.js');
+	foreach (array('mcmText', 'mcmAppend', 'mcmAbbr', 'mcmPosterImage', 'mcmListTab', 'mcmListPane', 'mcmListHeader', 'mcmSuggestionMarkup', 'mcmMarkup') as $builder) {
+		t_contains('function ' . $builder . ' (', $builders, 'js/dom.js defines ' . $builder . '()');
+	}
+
+	// A page whose script called a builder that had not loaded yet would fail
+	// at the first list it rendered, so the order is asserted rather than left
+	// to the eye.
+	foreach (array('inc/views/logged_in.php' => 'mc', 'inc/views/share.php' => 'share') as $view => $page_script) {
+		$declared = '';
+		if (preg_match('/\$post_scripts\s*=\s*array\(([^)]*)\)/', file_get_contents(MCM_REPO_ROOT . '/' . $view), $match) === 1) {
+			$declared = $match[1];
+		}
+		$builders_at = strpos($declared, "'dom'");
+		$page_at     = strpos($declared, "'" . $page_script . "'");
+		t_ok($builders_at !== false && $page_at !== false && $builders_at < $page_at, $view . ' loads js/dom.js ahead of js/' . $page_script . '.js', $declared);
+	}
+
+	// What a browser then builds out of a hostile value is a question only a
+	// browser answers. tests/browser/xss.html renders one through these very
+	// scripts and reports what the document ended up holding; it is opened by
+	// hand, and the suite only insists that it is still here to open.
+	t_ok(file_exists(MCM_REPO_ROOT . '/tests/browser/xss.html'), 'the browser page that renders hostile values is in the repository');
+
+	// The checks have to have teeth, so they are pointed at deliberately broken
+	// scripts. Nothing here touches the checkout.
+	$fixture = mcm_fixture('browser-checks');
+	$path    = $fixture['public'] . '/broken.js';
+	$broken  = array(
+		'a title pasted into an image tag' => array(
+			'source'  => "var html = '<img class=\"lazy\" alt=\"' + movie.title + '\">'\n",
+			'check'   => 'markup',
+			'problem' => 'a value is concatenated onto markup',
+		),
+		'a list name pasted into a heading' => array(
+			'source'  => "var header = '<h4>' + list.list_name + '</h4>'\n",
+			'check'   => 'markup',
+			'problem' => 'a value is concatenated onto markup',
+		),
+		'markup appended to a value' => array(
+			'source'  => "var row = open + list.list_name + '</a></li>'\n",
+			'check'   => 'markup',
+			'problem' => 'markup is concatenated onto a value',
+		),
+		'a value interpolated into a template literal' => array(
+			'source'  => "var row = `<li>\${list.list_name}</li>`\n",
+			'check'   => 'markup',
+			'problem' => 'a value is interpolated into markup',
+		),
+		'a name assigned as HTML' => array(
+			'source'  => "$('#list-tabs li a').html(list_name)\n",
+			'check'   => 'html',
+			'problem' => 'list_name',
+		),
+		'markup built elsewhere assigned as HTML' => array(
+			'source'  => "var markup = buildRow(list_name)\n$('#list-tabs').html(markup)\n",
+			'check'   => 'html',
+			'problem' => 'markup',
+		),
+		'a regular expression literal the scanner cannot read' => array(
+			'source'  => "var clean = list_name.replace(/['\"]/g, '')\n",
+			'check'   => 'regex',
+			'problem' => '/',
+		),
+	);
+
+	foreach ($broken as $description => $case) {
+		file_put_contents($path, $case['source']);
+		if ($case['check'] === 'markup') {
+			$found = mcm_js_markup_problems($path);
+		} elseif ($case['check'] === 'html') {
+			$found = mcm_js_html_assignments($path);
+		} else {
+			$found = mcm_js_regex_literals($path);
+		}
+		t_contains($case['problem'], implode(' | ', $found), 'the check rejects ' . $description);
+	}
+
+	// And they have to stay quiet about everything that is not markup built out
+	// of a value, or the scripts could not address an element again.
+	$clean = array(
+		'a name assigned as text'              => "$('<a>').text(list_name)\n",
+		'a name assigned as an attribute'      => "$('<img>').attr('alt', movie.title).attr('data-original', base_url + size + movie.poster_path)\n",
+		'an identifier inside a selector'      => "$('#list-tabs li:nth-child(' + (pos + 2) + ') a').text(list_name)\n",
+		'a fragment link built from an id'     => "$('<a>').attr('href', '#' + list_id)\n",
+		'markup joined to markup'              => "var html = '<div class=\"posters\">' + '</div>'\n",
+		'markup this file wrote, assigned'     => "$('#alerts').html('<div class=\"alert alert-danger\">Something went wrong!</div>')\n",
+		'markup this file wrote, appended to'  => "var html = '<div class=\"posters\">'\nhtml += '<div class=\"alert\"></div>'\n",
+		'reading with .html()'                 => "var movie_id = $('#dialog #movie-id').html()\n",
+		'an element handed to a sink'          => "$('#list-tabs').append(mcmListTab(list_id, list_name))\n",
+		'a URL and a comment holding slashes'  => "// see http://example.com/a/b\nvar url = 'http://example.com/' + list_id\n",
+		'an apostrophe inside a comment'       => "// the list's name is text, not markup: '<b>' stays '<b>'\nvar name = list.list_name\n",
+	);
+
+	foreach ($clean as $description => $source) {
+		file_put_contents($path, $source);
+		t_same(array(), mcm_js_markup_problems($path), 'the markup check accepts ' . $description);
+		t_same(array(), mcm_js_html_assignments($path), 'the .html() check accepts ' . $description);
+		t_same(array(), mcm_js_regex_literals($path), 'the scanner reads ' . $description . ' without seeing a regular expression');
+	}
+	unlink($path);
+});
