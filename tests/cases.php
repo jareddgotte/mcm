@@ -3467,15 +3467,18 @@ t_group('browser rendering', function () {
 		t_lacks('document.write', file_get_contents($file), $name . ' writes nothing into the document as it is parsed');
 	}
 
-	// Both page scripts render the same three things, and render them from the
-	// one file that knows how, so a change to any of it has one place to happen
-	// in - the arrangement inc/bootstrap.php already has for the server side.
+	// Both page scripts reach for the same three builders, so a change to any of
+	// it has one place to happen in - the arrangement inc/bootstrap.php already
+	// has for the server side. What a file contains is all these four say: that
+	// the call is written, or that the name is absent. Whether the call is
+	// reached, and what it renders when it is, is what tests/browser/xss.html
+	// answers.
 	foreach (array('js/mc.js', 'js/share.js') as $script) {
 		$source = file_get_contents(MCM_REPO_ROOT . '/' . $script);
-		t_contains('mcmPosterImage(', $source, $script . ' renders posters through the shared builder');
-		t_contains('mcmSuggestionMarkup(', $source, $script . ' renders typeahead suggestions through the shared builder');
-		t_contains('mcmListHeader(', $source, $script . ' renders the suggestion heading through the shared builder');
-		t_lacks('Handlebars', $source, $script . ' compiles no string template');
+		t_contains('mcmPosterImage(', $source, $script . ' calls the shared poster builder');
+		t_contains('mcmSuggestionMarkup(', $source, $script . ' calls the shared typeahead suggestion builder');
+		t_contains('mcmListHeader(', $source, $script . ' calls the shared suggestion heading builder');
+		t_lacks('Handlebars', $source, $script . ' names no string-template engine');
 	}
 
 	$builders = file_get_contents(MCM_REPO_ROOT . '/js/dom.js');
