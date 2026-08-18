@@ -35,11 +35,13 @@ This repository contains a placeholder database schema and a placeholder configu
 Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  Every case works on a throw-away copy of the site under the system temp directory, so running the suite never touches your checkout or your configuration.  Add `--filter=<text>` to run a single group.
 
 #### The optional database group
-One group is the exception, and it is optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.
+Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.
 
 The third kind is why the list endpoints are driven here as well: with rows to work on, the suite can sign in as a list's owner, as somebody else, and as nobody at all, and check the rows afterwards rather than only the response.  Without a database it still checks that an anonymous or malformed request is refused before a connection is opened.
 
-To cover those three, download a **MariaDB or MySQL binary tarball**, unpack it anywhere you like, and point the suite at the server binary inside it:
+The second of those groups is the movie authorization matrix: who may add, delete, move and import films, over two accounts with real lists and real rows.  Whose list a request named is a question only a database can answer, so without a server that matrix is skipped and what is left is the part that needs no database — a request with nobody signed in behind it is refused before the endpoint connects at all.
+
+To cover them, download a **MariaDB or MySQL binary tarball**, unpack it anywhere you like, and point the suite at the server binary inside it:
 
 ```
 MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd php tests/run.php

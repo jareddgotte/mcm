@@ -3,7 +3,15 @@
 // import TMDb list into my db
 
 require_once(__DIR__ . '/inc/bootstrap.php');
+// An import writes a whole list's worth of rows, so who is asking and whose
+// list they are writing into are settled with the shared guards before any of
+// it - and before the request goes out to TMDb, which is work nobody should be
+// able to make this site do without an account.
+require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
+
+// Nobody signed in has no list to import into.
+mcm_require_login();
 
 $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
 //$movie_list_id = 1;
@@ -13,7 +21,16 @@ $tmdb_list_id = (isset($_POST['tmdb_list_id'])) ? $_POST['tmdb_list_id'] : ((iss
 //The following may be used when "creating list from import"
 //$list_name = (isset($_POST['name'])) ? $_POST['name'] : ((isset($_GET['name'])) ? $_GET['name'] : '');
 //$list_name = 'test list';
-if ($movie_list_id === '') { echo 'Error: No movie list id given.'; exit(); }
+
+//echo "trying to connect to db<br>\n";
+// The connection is opened here rather than after the import so that ownership
+// can be settled first. The guard replaces the old "no movie list id given"
+// check, and refuses an empty identifier, one that is not a positive integer
+// and somebody else's list identically.
+$db_connection = mcm_db_or_fail('import_list');
+$movie_list_id = mcm_require_list_owner($db_connection, $movie_list_id);
+$user_id       = mcm_current_user_id();
+
 if ($tmdb_list_id === '') { echo 'Error: No import list id given.'; exit(); }
 
 if (!isset($_SESSION['tmdb_obj'])) {
@@ -28,9 +45,6 @@ if (isset($ImportList['status_code'])) {
 	//var_dump($ImportList);
 	exit();
 }
-
-//echo "trying to connect to db<br>\n";
-$db_connection = mcm_db_or_fail('import_list');
 
 //echo "iterating through imported list<br>\n";
 foreach ($ImportList['items'] as $v) {
@@ -72,15 +86,20 @@ foreach ($ImportList['items'] as $v) {
 	}
 	// check if movie is already added to this list or other lists of user
 	//echo "checking if movie is already added to user's lists<br>\n";
-	$query = $db_connection->prepare('SELECT * FROM movies a JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id');
+	// Scoped to this user, as add_movie.php has always scoped it. Without the
+	// owner in the WHERE clause the check asked whether anybody at all had the
+	// movie, so an import silently dropped every film another account happened
+	// to own.
+	$query = $db_connection->prepare('SELECT * FROM movies a JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id');
 	$query->bindValue(':tmdb_movie_id', $v['id'], PDO::PARAM_INT);
+	$query->bindValue(':user_id', $user_id, PDO::PARAM_INT);
 	mcm_db_execute($query, "import_list: checking the user's lists for the movie");
 	$rows = $query->fetchAll(PDO::FETCH_OBJ);
 	//   if it isn't, add it
 	if (count($rows) === 0) {
 		//echo "it isn't so we're adding it<br>\n";
 		$query = $db_connection->prepare('INSERT INTO movies (movie_list_id, tmdb_movie_id) VALUES (:movie_list_id, :tmdb_movie_id)');
-		$query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_STR);
+		$query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
 		$query->bindValue(':tmdb_movie_id', $v['id'], PDO::PARAM_INT);
 		mcm_db_execute($query, "import_list: adding a movie to the user's list");
 	}
@@ -90,7 +109,7 @@ foreach ($ImportList['items'] as $v) {
 // Update our db var
 echo 'greatsuccess';
 $query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
-$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
+$query->bindValue(':user_id', $user_id, PDO::PARAM_INT);
 mcm_db_execute($query, 'import_list: listing the lists');
 
 $movie_lists = array();
