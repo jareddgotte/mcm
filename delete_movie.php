@@ -1,17 +1,30 @@
 <?php
 
 require_once(__DIR__ . '/inc/bootstrap.php');
+// A delete that only names a list identifier deletes from whichever list was
+// named, so the two questions the shared guards ask - who is this, and is the
+// list theirs - are what stands between a request and somebody else's
+// collection.
+require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Kill the script if someone got here improperly
+// Nobody signed in has no collection to delete from.
+mcm_require_login();
+
 $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
 $tmdb_movie_id = (isset($_POST['tmdb_movie_id'])) ? $_POST['tmdb_movie_id'] : ((isset($_GET['tmdb_movie_id'])) ? $_GET['tmdb_movie_id'] : '');
 
-if ($movie_list_id === '') { echo 'Error: No movie list id given.'; exit(); }
-if ($tmdb_movie_id === '') { echo 'Error: No movie id given.'; exit(); }
-
 //echo "trying to connect to db<br>\n";
 $db_connection = mcm_db_or_fail('delete_movie');
+
+// The list has to be this user's before the delete is prepared, let alone run.
+// The guard also replaces the old "no movie list id given" check: an empty
+// identifier, an identifier that is not a positive integer and somebody else's
+// list are all refused the same way.
+$movie_list_id = mcm_require_list_owner($db_connection, $movie_list_id);
+
+// Kill the script if someone got here improperly
+if ($tmdb_movie_id === '') { echo 'Error: No movie id given.'; exit(); }
 
 // delete movie
 //echo "deleting movie<br>\n";

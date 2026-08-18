@@ -16,10 +16,15 @@
  * and a guard that answers it and, on "no", ends the request with a generic
  * JSON error.
  *
- * Nothing here decides anything on its own. The file only declares functions,
- * and no entry point calls them yet: adopting them, endpoint by endpoint, is
- * deliberately separate work, so that adding the helpers cannot change what any
- * request does today.
+ * Nothing here decides anything on its own. The file only declares functions:
+ * adopting them, endpoint by endpoint, is deliberately separate work, so that
+ * adding the helpers did not itself change what any request did on landing.
+ * The list mutation endpoints and the movie mutation endpoints - add_movie.php,
+ * delete_movie.php, move.php, import_list.php - have adopted
+ * mcm_require_login() and mcm_require_list_owner(); POST-only and CSRF
+ * enforcement are still unadopted everywhere. mcm_guarded_entry_points() in
+ * tests/entrypoints.php is the written-down list, and the suite fails a page
+ * that starts loading this file without being added there.
  *
  * Two rules hold throughout:
  *

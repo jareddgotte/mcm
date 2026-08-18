@@ -823,6 +823,74 @@ function mcm_db_user_row($pdo, $name)
 	return is_array($row) ? $row : array();
 }
 
+/**
+ * Empty every table a collection lives in, and hand back a connection.
+ *
+ * mcm_db_reset() already empties the users, their lists and the movies in them.
+ * The shared master movie list is the one an add and an import also write to,
+ * and a case that asserts a refusal wrote nothing has to be able to see it
+ * empty first, so it goes the same way and for the same reason: TRUNCATE takes
+ * the auto-increment counter back with it.
+ */
+function mcm_db_reset_collection(array $server)
+{
+	$pdo = mcm_db_reset($server);
+	$pdo->exec('TRUNCATE TABLE master_movie_list');
+
+	return $pdo;
+}
+
+/** Insert one row into the shared master movie list, as an import or an add would. */
+function mcm_db_seed_master_movie($pdo, $tmdb_movie_id, $title, $release_date)
+{
+	$statement = $pdo->prepare('INSERT INTO master_movie_list (tmdb_movie_id, tmdb_title, tmdb_original_title, tmdb_poster_path, tmdb_release_date) VALUES (:id, :title, :original_title, :poster_path, :release_date)');
+	$statement->bindValue(':id', $tmdb_movie_id, PDO::PARAM_INT);
+	$statement->bindValue(':title', $title);
+	$statement->bindValue(':original_title', $title);
+	$statement->bindValue(':poster_path', '/poster.jpg');
+	$statement->bindValue(':release_date', $release_date);
+	$statement->execute();
+}
+
+/**
+ * A query's rows as one comparable value: each row's columns joined with "|",
+ * in the order the query asked for them.
+ *
+ * This is how a case proves a refusal changed nothing. Comparing a snapshot
+ * taken before a refused request with one taken after says more than counting
+ * rows does: a delete that removed one row and an insert that added another
+ * would leave the count alone, and would not leave this alone.
+ *
+ * @return array
+ */
+function mcm_db_snapshot($pdo, $sql)
+{
+	$rows = array();
+	foreach ($pdo->query($sql)->fetchAll(PDO::FETCH_NUM) as $row) {
+		$rows[] = implode('|', $row);
+	}
+
+	return $rows;
+}
+
+/** Every row of the movies table: which list holds which film, and under which row id. */
+function mcm_db_movies_snapshot($pdo)
+{
+	return mcm_db_snapshot($pdo, 'SELECT id, movie_list_id, tmdb_movie_id FROM movies ORDER BY id');
+}
+
+/** Every row of the shared master movie list, which an add and an import both write to. */
+function mcm_db_master_snapshot($pdo)
+{
+	return mcm_db_snapshot($pdo, 'SELECT tmdb_movie_id, tmdb_title, tmdb_original_title, tmdb_poster_path, tmdb_release_date FROM master_movie_list ORDER BY tmdb_movie_id');
+}
+
+/** Every row of the movie lists table, so a refusal can be shown not to have touched a list either. */
+function mcm_db_lists_snapshot($pdo)
+{
+	return mcm_db_snapshot($pdo, 'SELECT movie_list_id, user_id, list_name, list_rank FROM movie_lists ORDER BY movie_list_id');
+}
+
 /* The skip ------------------------------------------------------------------ */
 
 /**

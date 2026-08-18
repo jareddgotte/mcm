@@ -71,6 +71,13 @@ the application. Setup is documented in `README.md`.
   endpoints are driven there against real rows, as owner, non-owner and nobody:
   a refusal that has already written is still a refusal from the outside, so
   every case asserts the rows afterwards and not only the response.
+- The movie authorization matrix runs on that same server and skips with it.
+  Ownership is a question about rows, so a refusal is asserted twice: what the
+  client was told, and a before/after snapshot of every table
+  (`mcm_db_movies_snapshot()` and friends) proving the refusal wrote nothing.
+  What no case covers is a successful import - that path calls TMDb over the
+  network, which the suite does not do; its refusals happen earlier and are
+  covered.
 - Server lifecycle is the sharp edge, because its failure mode is a hang rather
   than a failure. `proc_close()` waits for the child, so calling it on a server
   that ignored SIGTERM never returns; `mcm_db_stop_server()` therefore signals,
@@ -150,14 +157,26 @@ the application. Setup is documented in `README.md`.
   list of who has adopted them, and a page that starts loading them without
   being added there fails the suite.
 - The list mutation endpoints - `create_list.php`, `rename_list.php`,
-  `delete_list.php`, `adjust_lists.php`, `share_lists.php` - are the ones that
-  have adopted them. Each takes the owner from the session and never from the
-  request, and each write names that owner in its own `WHERE` clause as well:
+  `delete_list.php`, `adjust_lists.php`, `share_lists.php` - have adopted them,
+  as have the movie ones below. Each takes the owner from the session and never
+  from the request, and each write names that owner in its own `WHERE` clause:
   the guard refuses the request, and the clause is what leaves the statement
   unable to reach somebody else's row if a guard were ever dropped. A request
   naming several lists checks all of them before writing any, so a range that
   reaches one list belonging to somebody else moves none of them. POST-only and
   CSRF are the guards these have *not* adopted yet; that is its own issue.
+- The movie mutation endpoints - `add_movie.php`, `delete_movie.php`,
+  `move.php`, `import_list.php` - are guarded in one fixed order, and the order
+  is the point: `mcm_require_login()` before the connection is opened, then
+  `mcm_require_list_owner()` before the first query is prepared. Anything later
+  than that has already written something, because `master_movie_list` is shared
+  between every account and an add writes to it before it writes to the list.
+  `move.php` checks both ends, and `import_list.php` settles ownership before it
+  calls TMDb, so a refusal costs no network request. Duplicate detection is
+  scoped to the asking user in both `add_movie.php` and `import_list.php`.
+  POST-only and CSRF are deliberately not applied there yet; the suite proves
+  it behaviourally - an owner's GET still mutates and an owner's POST without a
+  CSRF token still mutates - so that the change which adds them is visible.
 - A refusal answers with a status from `mcm_json_error_catalogue()` and that
   status's fixed body, so two different reasons sharing a status cannot be told
   apart from outside; the reason goes to the log through `mcm_log()`. Tokens are

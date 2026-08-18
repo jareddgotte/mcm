@@ -3025,3 +3025,420 @@ t_group('cookie hardening', function () {
 	t_contains('MCM_SESSION_COOKIE_SAMESITE', $helper, 'the helper takes SameSite from the configuration');
 	t_contains('mcm_cookie_secure', $helper, 'the helper takes the secure flag from the one place that decides it');
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * 23. Who may add, delete, move and import movies
+ * ---------------------------------------------------------------------------
+ *
+ * The four movie mutation endpoints are the first to adopt the shared guards,
+ * and what they now refuse is asserted in three places for three reasons.
+ *
+ * This group needs no database, and that is the point of it: the fixture is
+ * pointed at an address nothing is listening on, so a request that was refused
+ * before it ever tried to connect leaves an empty log, and a request that got
+ * as far as the database says so in the log. "Nobody signed in changed
+ * nothing" is therefore observable without a database at all - the request
+ * stopped before the connection, so there was nothing it could have changed.
+ *
+ * The group after it puts the same endpoints in front of a real server with
+ * real rows, which is the only way to ask who owns which list; and the one
+ * after that reads the endpoints themselves, because the order of two guards
+ * is a fact about the source that a passing request cannot demonstrate.
+ */
+
+t_group('movie endpoints refuse before the database', function () {
+	// Port 1 is privileged: nothing here can be listening on it, so any request
+	// that reaches the connection fails there and says so.
+	$fixture = mcm_fixture('movie-guards', array('config' => array('DB_HOST' => '127.0.0.1;port=1')));
+
+	$signed_in  = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+	$signed_out = 'e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2';
+	mcm_seed_session($fixture, $signed_in, array('user_name' => 'signed-in-user', 'user_id' => 7, 'user_logged_in' => 1));
+	mcm_seed_session($fixture, $signed_out, array('user_name' => 'signed-out-user', 'user_logged_in' => 0));
+
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+
+	// A complete, well-formed request for each endpoint, so that nothing is
+	// refused for a missing parameter and the refusal under test is the only
+	// reason anything stopped.
+	$requests = array(
+		'add_movie.php' => array(
+			'movie_list_id'       => 11,
+			'tmdb_movie_id'       => 550,
+			'tmdb_title'          => 'A Film',
+			'tmdb_original_title' => 'A Film',
+			'tmdb_poster_path'    => '/poster.jpg',
+			'tmdb_release_date'   => '1999-10-15',
+		),
+		'delete_movie.php' => array('movie_list_id' => 11, 'tmdb_movie_id' => 550),
+		'move.php'         => array('from_list' => 11, 'to_list' => 12, 'movie_id' => 550),
+		'import_list.php'  => array('movie_list_id' => 11, 'tmdb_list_id' => '5212934a760ee36af148407c'),
+	);
+
+	$server = mcm_server_start($fixture);
+	try {
+		foreach ($requests as $page => $fields) {
+			$visitors = array(
+				'a visitor with no session' => array(),
+				'a signed-out session'      => array('Cookie: PHPSESSID=' . $signed_out),
+			);
+			foreach ($visitors as $description => $headers) {
+				$response = mcm_http_post($server, '/' . $page, $fields, $headers);
+
+				t_same(401, $response['status'], $page . ' refuses ' . $description);
+				t_same($unauthorised, $response['body'], $page . ' answers ' . $description . ' with the shared fixed body');
+				t_lacks('greatsuccess', $response['body'], $page . ' does not tell ' . $description . ' that it worked');
+				t_contains('no signed-in user', $response['log'], $page . ' logs why it refused ' . $description);
+				// The absent connection failure is the whole assertion: this
+				// fixture has no database to reach, so a request that got as far
+				// as connecting would have logged the refusal of that
+				// connection. This one did not, so there was nothing it could
+				// have written.
+				t_lacks('Database error', $response['log'], $page . ' stops ' . $description . ' before it reaches the database');
+			}
+
+			// The same refusal off the POST path. Making these endpoints
+			// POST-only is a separate change; until it lands, a GET must not be
+			// the way around the guard.
+			$response = mcm_http($server, '/' . $page . '?' . http_build_query($fields));
+			t_same(401, $response['status'], $page . ' refuses an unauthenticated GET too');
+			t_lacks('Database error', $response['log'], $page . ' stops an unauthenticated GET before it reaches the database');
+
+			// A signed-in visitor gets past the login guard and on to the
+			// database, which is where the question of whose list this is has
+			// to be settled. Here that connection is the one that fails.
+			$response = mcm_http_post($server, '/' . $page, $fields, array('Cookie: PHPSESSID=' . $signed_in));
+
+			t_same(500, $response['status'], $page . ' lets a signed-in visitor through to the database');
+			t_same(mcm_generic_message(), $response['body'], $page . ' gives the generic message when the database is down');
+			t_lacks('greatsuccess', $response['body'], $page . ' does not claim it worked when the database is down');
+			t_contains('connection failed', $response['log'], $page . ' logs the connection it could not open');
+			t_contains(substr($page, 0, strpos($page, '.')), $response['log'], $page . ' names itself in the log');
+		}
+
+		// An import is the one endpoint that would otherwise send a request of
+		// its own, so it is worth saying separately: neither an anonymous
+		// request nor an authenticated one reaches TMDb before the list it
+		// would write into has been settled.
+		$tmdb = array('movie_list_id' => 11, 'tmdb_list_id' => '5212934a760ee36af148407c');
+		foreach (array('an anonymous' => array(), 'a signed-in' => array('Cookie: PHPSESSID=' . $signed_in)) as $description => $headers) {
+			$response = mcm_http_post($server, '/import_list.php', $tmdb, $headers);
+			t_lacks('Method failed', $response['log'], $description . ' import contacts nothing outside this site');
+			t_lacks('themoviedb', $response['log'], $description . ' import names no external service in the log');
+		}
+	} catch (Exception $exception) {
+		t_ok(false, 'the movie endpoint refusal cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+t_group('import_list.php source checks of last resort', function () {
+	// Guard order and scope for every endpoint, including import_list.php's own
+	// ownership guard, are proven behaviourally by 'movie ownership over a real
+	// database': a missing or misplaced guard, a move missing either end, an
+	// unscoped duplicate check, a GET that still mutates and a POST that mutates
+	// without a CSRF token all show up there, because a refused request is
+	// snapshotted before and after and a permitted one is checked against what
+	// it actually wrote. What is left here is only what that group cannot
+	// reach: import_list.php's own call out to TMDb, which no case in this
+	// suite makes, so nothing behavioural can show where its ownership check
+	// sits relative to that call, or how its duplicate query scopes its WHERE
+	// clause. These read the source because the path cannot be executed here,
+	// and reading the source proves what the text says, not what a request does.
+	$import_source = mcm_flat_source(MCM_REPO_ROOT . '/import_list.php');
+	$ownership     = strpos($import_source, 'mcm_require_list_owner');
+	$tmdb_call     = strpos($import_source, 'getList');
+
+	t_ok($ownership !== false && $tmdb_call !== false, 'import_list.php has both an ownership check and a call to TMDb');
+	t_ok($ownership < $tmdb_call, 'the ownership check appears before the call to TMDb in import_list.php\'s source');
+
+	t_contains(
+		'JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id',
+		$import_source,
+		'import_list.php\'s duplicate lookup query text is scoped to one account'
+	);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 24. The movie authorization matrix, over real rows
+ * ---------------------------------------------------------------------------
+ *
+ * Who owns which list is a question only a database can answer, so this is the
+ * group that answers it: two accounts, three lists and real movies, and one
+ * request per square of the matrix. Every refusal is checked twice - once for
+ * what the client was told, and once for the state of every row afterwards,
+ * because a refusal that answered 403 and still wrote is the failure this
+ * change exists to prevent.
+ *
+ * Like the group it shares its machinery with, it skips loudly where there is
+ * no server binary to run. What it cannot cover either way is a successful
+ * import: that one calls TMDb over the network, which no case here does. The
+ * refusals happen before that call, so they are covered; what an authorized
+ * import then writes is not.
+ */
+
+t_group('movie ownership over a real database', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		t_skip('the movie ownership cases', mcm_db_skip_reason());
+		return;
+	}
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded for the movie cases')) {
+		return;
+	}
+
+	$fixture = mcm_db_fixture('movie-ownership', $server);
+	$pdo     = mcm_db_reset_collection($server);
+
+	// Two accounts with lists of their own, and one film each to start with.
+	$alice = mcm_db_seed_user($pdo, 'alice', 'p' . bin2hex(random_bytes(6)));
+	$bob   = mcm_db_seed_user($pdo, 'bob', 'p' . bin2hex(random_bytes(6)));
+
+	$alice_one = mcm_db_seed_list($pdo, $alice, 'alice one', 0);
+	$alice_two = mcm_db_seed_list($pdo, $alice, 'alice two', 1);
+	$bob_one   = mcm_db_seed_list($pdo, $bob, 'bob one', 0);
+
+	mcm_db_seed_master_movie($pdo, 101, 'Movie One', '2001-01-01');
+	mcm_db_seed_master_movie($pdo, 102, 'Movie Two', '2002-02-02');
+
+	$alice_row = mcm_db_seed_movie($pdo, $alice_one, 101);
+	$bob_row   = mcm_db_seed_movie($pdo, $bob_one, 102);
+
+	$alice_session = 'f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1';
+	$bob_session   = 'f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2';
+	mcm_seed_session($fixture, $alice_session, array('user_name' => 'alice', 'user_id' => $alice, 'user_logged_in' => 1));
+	mcm_seed_session($fixture, $bob_session, array('user_name' => 'bob', 'user_id' => $bob, 'user_logged_in' => 1));
+
+	$as_alice = array('Cookie: PHPSESSID=' . $alice_session);
+	$as_bob   = array('Cookie: PHPSESSID=' . $bob_session);
+
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+
+	// Everything a refused request must leave alone: which film is in which
+	// list and under which row id, the shared master list an add writes to, and
+	// the lists themselves.
+	$state = function () use ($pdo) {
+		return array(
+			'movies' => mcm_db_movies_snapshot($pdo),
+			'master' => mcm_db_master_snapshot($pdo),
+			'lists'  => mcm_db_lists_snapshot($pdo),
+		);
+	};
+
+	$server_handle = mcm_server_start($fixture);
+	try {
+		/* Adding ------------------------------------------------------------ */
+
+		// A film nobody has yet, so an add that got through would be visible in
+		// the shared master list as well as in the movies table.
+		$new_film = array(
+			'tmdb_movie_id'       => 103,
+			'tmdb_title'          => 'Movie Three',
+			'tmdb_original_title' => 'Movie Three',
+			'tmdb_poster_path'    => '/three.jpg',
+			'tmdb_release_date'   => '2003-03-03',
+		);
+
+		$refusals = array(
+			'an anonymous add' => array(
+				'headers' => array(),
+				'fields'  => array('movie_list_id' => $alice_one) + $new_film,
+				'status'  => 401,
+				'body'    => $unauthorised,
+			),
+			"an add to somebody else's list" => array(
+				'headers' => $as_bob,
+				'fields'  => array('movie_list_id' => $alice_one) + $new_film,
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			'an add to a list that does not exist' => array(
+				'headers' => $as_alice,
+				'fields'  => array('movie_list_id' => 4242) + $new_film,
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			'an add with an identifier that is not one' => array(
+				'headers' => $as_alice,
+				'fields'  => array('movie_list_id' => $alice_one . ' OR 1=1') + $new_film,
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+		);
+		foreach ($refusals as $description => $case) {
+			$before   = call_user_func($state);
+			$response = mcm_http_post($server_handle, '/add_movie.php', $case['fields'], $case['headers']);
+
+			t_same($case['status'], $response['status'], $description . ' is refused');
+			t_same($case['body'], $response['body'], $description . ' gets the shared fixed body');
+			// The master movie list is shared between every account and is the
+			// first thing add_movie.php used to write. A refusal that arrived
+			// after that write would show up here.
+			t_same($before, call_user_func($state), $description . ' changes nothing at all');
+		}
+
+		// The owner's own list still works, and answers what it always did. This
+		// request also carries no CSRF token, which is not yet required: making
+		// it required is separate work with its own issue, and this is the
+		// behavioural evidence that will fail once it lands.
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/add_movie.php', array('movie_list_id' => $alice_two) + $new_film, $as_alice);
+
+		t_same(200, $response['status'], 'the owner may add to her own list');
+		t_same('1', $response['body'], 'a film that was not in her collection reports as inserted');
+		t_same(count($before['movies']) + 1, count(call_user_func($state)['movies']), 'the film lands in exactly one row');
+		t_same(count($before['master']) + 1, count(call_user_func($state)['master']), 'a film nobody had reaches the shared master list');
+		t_contains($alice_two . '|103', implode("\n", mcm_db_movies_snapshot($pdo)), 'the film lands in the list she named');
+
+		// The same film again is a duplicate, and is reported as one.
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/add_movie.php', array('movie_list_id' => $alice_one) + $new_film, $as_alice);
+
+		t_same('2', $response['body'], 'a film already in her collection reports as a duplicate');
+		t_same($before, call_user_func($state), 'a duplicate writes nothing');
+
+		// Duplicate detection is scoped to the account asking. Alice having a
+		// film is not a reason for Bob to be told he already has it.
+		$response = mcm_http_post($server_handle, '/add_movie.php', array('movie_list_id' => $bob_one) + $new_film, $as_bob);
+
+		t_same('1', $response['body'], "another account's copy of the same film is not this account's duplicate");
+		t_contains($bob_one . '|103', implode("\n", mcm_db_movies_snapshot($pdo)), 'the film lands in the other account\'s list too');
+
+		// The owner reaches the page's own checks, which are unchanged.
+		$response = mcm_http_post($server_handle, '/add_movie.php', array('movie_list_id' => $alice_one), $as_alice);
+		t_same('Error: No movie id given.', $response['body'], 'the owner still gets the page\'s own message for a missing film');
+
+		/* Deleting ---------------------------------------------------------- */
+
+		$deletions = array(
+			'an anonymous delete' => array('headers' => array(), 'status' => 401, 'body' => $unauthorised),
+			"a delete from somebody else's list" => array('headers' => $as_bob, 'status' => 403, 'body' => $forbidden),
+		);
+		foreach ($deletions as $description => $case) {
+			$before   = call_user_func($state);
+			$response = mcm_http_post($server_handle, '/delete_movie.php', array('movie_list_id' => $alice_one, 'tmdb_movie_id' => 101), $case['headers']);
+
+			t_same($case['status'], $response['status'], $description . ' is refused');
+			t_same($case['body'], $response['body'], $description . ' gets the shared fixed body');
+			t_lacks('greatsuccess', $response['body'], $description . ' is not told it worked');
+			t_same($before, call_user_func($state), $description . ' leaves every row where it was');
+		}
+
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/delete_movie.php', array('movie_list_id' => $alice_one, 'tmdb_movie_id' => 101), $as_alice);
+		$after    = call_user_func($state);
+
+		t_same(200, $response['status'], 'the owner may delete from her own list');
+		t_contains('greatsuccess', $response['body'], 'the owner is told the delete worked');
+		t_same(count($before['movies']) - 1, count($after['movies']), 'exactly one row goes');
+		t_lacks($alice_row . '|' . $alice_one . '|101', implode("\n", $after['movies']), 'the row she deleted is the one that went');
+		t_contains($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), "the other account's rows are untouched");
+
+		// A GET is not yet refused for these endpoints either - method
+		// enforcement is the same separate issue as the CSRF requirement above -
+		// so the owner's mutation goes through that way too.
+		$before   = call_user_func($state);
+		$response = mcm_http($server_handle, '/delete_movie.php?' . http_build_query(array('movie_list_id' => $bob_one, 'tmdb_movie_id' => 102)), $as_bob);
+		$after    = call_user_func($state);
+
+		t_contains('greatsuccess', $response['body'], "the owner's GET still performs the delete");
+		t_same(count($before['movies']) - 1, count($after['movies']), 'the GET delete removes exactly one row');
+		t_lacks($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), 'the row named in the GET is the one that went');
+
+		/* Moving ------------------------------------------------------------ */
+
+		// Every way of moving a film across the boundary between two accounts,
+		// in both directions.
+		$moves = array(
+			'an anonymous move' => array(
+				'headers' => array(),
+				'fields'  => array('from_list' => $alice_two, 'to_list' => $alice_one, 'movie_id' => 103),
+				'status'  => 401,
+				'body'    => $unauthorised,
+			),
+			"a move out of somebody else's list" => array(
+				'headers' => $as_bob,
+				'fields'  => array('from_list' => $alice_two, 'to_list' => $bob_one, 'movie_id' => 103),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			"a move into somebody else's list" => array(
+				'headers' => $as_alice,
+				'fields'  => array('from_list' => $alice_two, 'to_list' => $bob_one, 'movie_id' => 103),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			'a move between two lists that are neither of theirs' => array(
+				'headers' => $as_bob,
+				'fields'  => array('from_list' => $alice_one, 'to_list' => $alice_two, 'movie_id' => 103),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+		);
+		foreach ($moves as $description => $case) {
+			$before   = call_user_func($state);
+			$response = mcm_http_post($server_handle, '/move.php', $case['fields'], $case['headers']);
+
+			t_same($case['status'], $response['status'], $description . ' is refused');
+			t_same($case['body'], $response['body'], $description . ' gets the shared fixed body');
+			t_same($before, call_user_func($state), $description . ' leaves the film where it was');
+		}
+
+		// A move between two lists she owns still works, and the row keeps its
+		// identifier: a move moves a row, it does not delete and re-add one.
+		$moved_row = '';
+		foreach (mcm_db_movies_snapshot($pdo) as $row) {
+			if (strpos($row, '|' . $alice_two . '|103') !== false) {
+				$moved_row = substr($row, 0, strpos($row, '|'));
+			}
+		}
+		t_ok($moved_row !== '', 'the film to move was found in the list it started in');
+
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/move.php', array('from_list' => $alice_two, 'to_list' => $alice_one, 'movie_id' => 103), $as_alice);
+		$after    = call_user_func($state);
+
+		t_same(200, $response['status'], 'the owner may move a film between her own lists');
+		t_same(count($before['movies']), count($after['movies']), 'a move adds and removes nothing');
+		t_contains($moved_row . '|' . $alice_one . '|103', implode("\n", $after['movies']), 'the film is now in the list she moved it to');
+		t_lacks($moved_row . '|' . $alice_two . '|103', implode("\n", $after['movies']), 'and no longer in the one it came from');
+		t_same($before['master'], $after['master'], 'a move leaves the shared master list alone');
+		t_same($before['lists'], $after['lists'], 'a move leaves the lists themselves alone');
+
+		/* Importing --------------------------------------------------------- */
+
+		// The refusals happen before the import contacts TMDb, so they are the
+		// part of this endpoint a test can drive. What an authorized import
+		// then writes is not covered here: that call goes out to the network.
+		$imports = array(
+			'an anonymous import' => array('headers' => array(), 'list' => $alice_one, 'status' => 401, 'body' => $unauthorised),
+			"an import into somebody else's list" => array('headers' => $as_bob, 'list' => $alice_one, 'status' => 403, 'body' => $forbidden),
+			'an import into a list that does not exist' => array('headers' => $as_alice, 'list' => 4242, 'status' => 403, 'body' => $forbidden),
+		);
+		foreach ($imports as $description => $case) {
+			$before   = call_user_func($state);
+			$response = mcm_http_post($server_handle, '/import_list.php', array('movie_list_id' => $case['list'], 'tmdb_list_id' => '5212934a760ee36af148407c'), $case['headers']);
+
+			t_same($case['status'], $response['status'], $description . ' is refused');
+			t_same($case['body'], $response['body'], $description . ' gets the shared fixed body');
+			t_same($before, call_user_func($state), $description . ' changes nothing at all');
+			t_lacks('Method failed', $response['log'], $description . ' never reaches TMDb');
+		}
+
+		// The owner is not refused: she gets past both guards and stops on the
+		// page's own check, which is as far as a case can follow her without
+		// letting the suite talk to TMDb.
+		$before   = call_user_func($state);
+		$response = mcm_http_post($server_handle, '/import_list.php', array('movie_list_id' => $alice_one, 'tmdb_list_id' => ''), $as_alice);
+
+		t_same(200, $response['status'], 'the owner is not refused an import into her own list');
+		t_same('Error: No import list id given.', $response['body'], "the owner reaches the page's own check");
+		t_same($before, call_user_func($state), 'a request that stops on that check writes nothing');
+	} catch (Exception $exception) {
+		t_ok(false, 'the movie ownership cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server_handle);
+});

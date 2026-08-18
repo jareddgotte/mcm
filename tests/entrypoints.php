@@ -656,9 +656,13 @@ function mcm_check_entry_point($file, $root)
 function mcm_guarded_entry_points()
 {
 	return array(
+		'add_movie.php',
 		'adjust_lists.php',
 		'create_list.php',
 		'delete_list.php',
+		'delete_movie.php',
+		'import_list.php',
+		'move.php',
 		'rename_list.php',
 		'share_lists.php',
 	);

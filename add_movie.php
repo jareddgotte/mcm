@@ -1,9 +1,16 @@
 <?php
 
 require_once(__DIR__ . '/inc/bootstrap.php');
+// Two questions have to be answered before this page writes anything: is
+// anybody signed in, and is the list they named theirs. Both are asked with the
+// shared guards, so a refusal here is the same refusal every other endpoint
+// gives, and it is given before any query runs.
+require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Kill the script if someone got here improperly
+// Nobody signed in has no collection to add to.
+mcm_require_login();
+
 $movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
 $tmdb_movie_id = (isset($_POST['tmdb_movie_id'])) ? $_POST['tmdb_movie_id'] : ((isset($_GET['tmdb_movie_id'])) ? $_GET['tmdb_movie_id'] : '');
 $tmdb_title = (isset($_POST['tmdb_title'])) ? $_POST['tmdb_title'] : ((isset($_GET['tmdb_title'])) ? $_GET['tmdb_title'] : '');
@@ -11,17 +18,26 @@ $tmdb_original_title = (isset($_POST['tmdb_original_title'])) ? $_POST['tmdb_ori
 $tmdb_poster_path = (isset($_POST['tmdb_poster_path'])) ? $_POST['tmdb_poster_path'] : ((isset($_GET['tmdb_poster_path'])) ? $_GET['tmdb_poster_path'] : '');
 $tmdb_release_date = (isset($_POST['tmdb_release_date'])) ? $_POST['tmdb_release_date'] : ((isset($_GET['tmdb_release_date'])) ? $_GET['tmdb_release_date'] : '');
 
-if ($movie_list_id === '') { echo 'Error: No movie list id given.'; exit(); }
+//printf("c[%s] m[%s]\n", $current_list, $movie_id);
+//echo "trying to connect to db<br>\n";
+$db_connection = mcm_db_or_fail('add_movie');
+
+// Which list this is settles here, and it settles before the first query.
+// master_movie_list is shared between every account and is written further
+// down, so a refusal that came any later would already have changed data. The
+// guard also replaces the old "no movie list id given" check: it refuses an
+// empty identifier, an identifier that is not a positive integer and somebody
+// else's list identically.
+$movie_list_id = mcm_require_list_owner($db_connection, $movie_list_id);
+$user_id       = mcm_current_user_id();
+
+// Kill the script if someone got here improperly
 if ($tmdb_movie_id === '') { echo 'Error: No movie id given.'; exit(); }
 if ($tmdb_title === '') { echo 'Error: No movie title given.'; exit(); }
 if ($tmdb_release_date === '') { echo 'Error: No movie release date given.'; exit(); }
 // Optional:
 //if ($tmdb_original_title === '') { echo 'Error: No movie original title given.'; exit(); }
 //if ($tmdb_poster_path === '') { echo 'Error: No movie poster path given.'; exit(); }
-
-//printf("c[%s] m[%s]\n", $current_list, $movie_id);
-//echo "trying to connect to db<br>\n";
-$db_connection = mcm_db_or_fail('add_movie');
 
 // check if movie is already added to master list
 //echo "checking if movie is already added to master list<br>\n";
@@ -63,7 +79,10 @@ else {
 //echo "checking if movie is already added to user's lists<br>\n";
 $query = $db_connection->prepare('SELECT * FROM movies a JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id');
 $query->bindValue(':tmdb_movie_id', $tmdb_movie_id, PDO::PARAM_INT);
-$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
+// The duplicate is only a duplicate when this user already has the movie. The
+// owner comes from the guards rather than straight out of the session, so the
+// value queried with is the one ownership was decided on.
+$query->bindValue(':user_id', $user_id, PDO::PARAM_INT);
 mcm_db_execute($query, "add_movie: checking the user's lists for the movie");
 $rows = $query->fetchAll(PDO::FETCH_OBJ);
 
@@ -71,7 +90,7 @@ $rows = $query->fetchAll(PDO::FETCH_OBJ);
 if (count($rows) === 0) {
 	//echo "it isn't so we're adding it<br>\n";
 	$query = $db_connection->prepare('INSERT INTO movies (movie_list_id, tmdb_movie_id) VALUES (:movie_list_id, :tmdb_movie_id)');
-	$query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_STR);
+	$query->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
 	$query->bindValue(':tmdb_movie_id', $tmdb_movie_id, PDO::PARAM_INT);
 	mcm_db_execute($query, "add_movie: adding the movie to the user's list");
 	echo '1'; // inserted
