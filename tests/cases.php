@@ -2309,3 +2309,255 @@ t_group('list name validation', function () {
 	}
 	t_contains('preg_match', $validation, 'the validation matches the name rather than rewriting it');
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * 19. The baseline headers every response carries
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('security headers', function () {
+	/* The default fixture, over the wire ---------------------------------------- */
+
+	$fixture = mcm_fixture('headers');
+	$server  = mcm_server_start($fixture);
+
+	try {
+		// A page nobody is signed in for.
+		$response = mcm_http($server, '/probe.php');
+		t_same(200, $response['status'], 'the probe page renders with the headers on');
+		t_same(array('nosniff'), mcm_header_values($response, 'X-Content-Type-Options'), 'a public page says its type is not to be guessed');
+		t_same(array('SAMEORIGIN'), mcm_header_values($response, 'X-Frame-Options'), 'a public page refuses to be framed elsewhere');
+		t_same(array('strict-origin-when-cross-origin'), mcm_header_values($response, 'Referrer-Policy'), 'a public page tells another origin no more than this one');
+		t_same(
+			array('camera=(), geolocation=(), microphone=(), payment=()'),
+			mcm_header_values($response, 'Permissions-Policy'),
+			'a public page switches off the device features no page here uses'
+		);
+
+		// The whole point of this policy: it describes, it does not enforce.
+		// Both halves matter, so both are asserted - the report-only header is
+		// there, and the header that would refuse content is not.
+		$policy = mcm_header_values($response, 'Content-Security-Policy-Report-Only');
+		t_same(1, count($policy), 'exactly one report-only content policy is sent');
+		t_same(array(), mcm_header_values($response, 'Content-Security-Policy'), 'no enforcing content policy is sent');
+
+		$policy = isset($policy[0]) ? $policy[0] : '';
+		t_contains("default-src 'self'", $policy, 'the policy starts from this origin only');
+		t_contains("object-src 'none'", $policy, 'the policy allows no plugin content');
+		t_contains("base-uri 'self'", $policy, 'the policy pins the document base to this origin');
+		t_contains("form-action 'self'", $policy, 'the policy submits forms to this origin');
+		t_contains("frame-ancestors 'self'", $policy, 'the policy names who may frame these pages');
+		t_lacks('report-uri', $policy, 'no report address is sent when none is configured');
+
+		// What the pages actually load. A policy that left any of these out
+		// would report on every page view and say nothing worth reading.
+		t_contains('ajax.googleapis.com', $policy, 'the policy names the script host the markup loads jQuery from');
+		t_contains('netdna.bootstrapcdn.com', $policy, 'the policy names the host the markup loads Bootstrap from');
+		t_contains('api.themoviedb.org', $policy, 'the policy names the search endpoint the type-ahead calls');
+		t_contains('www.youtube.com', $policy, 'the policy names the video host the trailer dialog frames');
+		t_contains("'unsafe-inline'", $policy, 'the policy admits the inline blocks the views are built out of');
+
+		// Deferred on purpose, and the assertion has teeth only next to one
+		// that proves the header-sending code ran on this same response.
+		t_same(array(), mcm_header_values($response, 'Strict-Transport-Security'), 'a page carries no strict transport security header');
+
+		// A page a signed-in visitor sees. The session is seeded rather than
+		// logged in to, so the case needs no database.
+		$existing = 'aaaabbbbccccddddeeeeffff00001111';
+		mcm_seed_session($fixture, $existing, array('user_name' => 'signed-in', 'user_id' => 3));
+
+		$response = mcm_http($server, '/probe.php', array('Cookie: PHPSESSID=' . $existing));
+		$report   = mcm_report($response['body']);
+		t_same($existing, $report['session_id'], 'the signed-in session is the one being served');
+		t_same(array('nosniff'), mcm_header_values($response, 'X-Content-Type-Options'), 'a signed-in page says its type is not to be guessed');
+		t_same(array('SAMEORIGIN'), mcm_header_values($response, 'X-Frame-Options'), 'a signed-in page refuses to be framed elsewhere');
+		t_same(1, count(mcm_header_values($response, 'Content-Security-Policy-Report-Only')), 'a signed-in page carries the report-only policy');
+		t_same(array(), mcm_header_values($response, 'Content-Security-Policy'), 'a signed-in page sends no enforcing content policy');
+
+		// The captcha is the one include-tree file the browser requests
+		// directly, and it sets headers of its own.
+		$response = mcm_http($server, '/inc/showCaptcha.php');
+		t_same(200, $response['status'], 'the captcha endpoint renders with the headers on');
+		t_same("\x89PNG", substr($response['body'], 0, 4), 'the captcha body is still a real PNG');
+		t_same(array('nosniff'), mcm_header_values($response, 'X-Content-Type-Options'), 'the captcha carries the baseline headers too');
+		t_contains('image/png', implode('', mcm_header_values($response, 'Content-Type')), 'the captcha keeps its own content type');
+		t_contains('no-cache', implode('', mcm_header_values($response, 'Pragma')), 'the captcha keeps its own caching headers');
+		t_same('', $response['log'], 'the captcha still logs nothing');
+	} catch (Exception $exception) {
+		t_ok(false, 'the security header cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	/* A redirect is a response too ---------------------------------------------- */
+
+	$fixture = mcm_fixture('headers-redirect', array('config' => array(
+		'MCM_CANONICAL_HOST' => 'movies.example',
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		t_same(302, $response['status'], 'the plain-HTTP request is still redirected');
+		t_same(array('nosniff'), mcm_header_values($response, 'X-Content-Type-Options'), 'the redirect carries the baseline headers');
+		t_same(1, count(mcm_header_values($response, 'Content-Security-Policy-Report-Only')), 'the redirect carries the report-only policy');
+		t_same(array(), mcm_header_values($response, 'Strict-Transport-Security'), 'the redirect still carries no strict transport security header');
+	} catch (Exception $exception) {
+		t_ok(false, 'the redirect header cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	/* What a site can change from its own configuration -------------------------- */
+
+	$fixture = mcm_fixture('headers-off', array('config' => array('MCM_SECURITY_HEADERS' => false)));
+	$server  = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		t_same(200, $response['status'], 'a page still renders with the headers switched off');
+		t_same(array(), mcm_header_values($response, 'X-Content-Type-Options'), 'the configuration can take the baseline headers back off');
+		t_same(array(), mcm_header_values($response, 'X-Frame-Options'), 'the frame refusal goes with them');
+		t_same(array(), mcm_header_values($response, 'Content-Security-Policy-Report-Only'), 'the content policy goes with them');
+	} catch (Exception $exception) {
+		t_ok(false, 'the headers-off cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	$fixture = mcm_fixture('headers-no-policy', array('config' => array('MCM_CONTENT_SECURITY_POLICY' => '')));
+	$server  = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		t_same(array(), mcm_header_values($response, 'Content-Security-Policy-Report-Only'), 'an empty policy leaves the header off');
+		t_same(array('nosniff'), mcm_header_values($response, 'X-Content-Type-Options'), 'dropping the policy keeps the other headers');
+	} catch (Exception $exception) {
+		t_ok(false, 'the empty-policy cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	$fixture = mcm_fixture('headers-own-policy', array('config' => array(
+		'MCM_CONTENT_SECURITY_POLICY' => "default-src 'none'; img-src 'self'",
+		'MCM_CSP_REPORT_URI'          => 'https://reports.example/csp',
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		$policy   = mcm_header_values($response, 'Content-Security-Policy-Report-Only');
+		t_same(
+			array("default-src 'none'; img-src 'self'; report-uri https://reports.example/csp"),
+			$policy,
+			'a configured policy and report address reach the response header'
+		);
+		t_same(array(), mcm_header_values($response, 'Content-Security-Policy'), 'a configured policy is still only ever report-only');
+		t_same('', $response['log'], 'a usable report address is not complained about');
+	} catch (Exception $exception) {
+		t_ok(false, 'the configured-policy cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// A report address carrying a directive separator would silently become a
+	// directive of its own, so it is refused and the policy still goes out.
+	$fixture = mcm_fixture('headers-bad-report', array('config' => array(
+		'MCM_CSP_REPORT_URI' => "https://reports.example/csp; script-src *",
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe.php');
+		$policy   = mcm_header_values($response, 'Content-Security-Policy-Report-Only');
+		t_same(1, count($policy), 'an unusable report address does not cost the policy');
+		t_lacks('report-uri', implode('', $policy), 'an unusable report address is not used');
+		t_lacks('script-src *', implode('', $policy), 'an unusable report address adds no directive of its own');
+		t_contains('MCM_CSP_REPORT_URI is not a usable address', $response['log'], 'an unusable report address is logged');
+	} catch (Exception $exception) {
+		t_ok(false, 'the unusable-report-address cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	/* The one fact a response cannot show ---------------------------------------- */
+
+	// Nothing in a passing response proves the enforcing header could never be
+	// sent; only the code that names the headers can say that. Read from the
+	// one function that builds them, so no other part of the file can satisfy it.
+	$source = mcm_function_source(MCM_REPO_ROOT . '/inc/bootstrap.php', 'mcm_security_headers');
+	t_ok($source !== '', 'the header list was found in the bootstrap', 'mcm_security_headers() is not declared there');
+	t_contains('Content-Security-Policy-Report-Only', $source, 'the header list names the report-only policy header');
+	t_not_matches(
+		'/Content-Security-Policy(?!-Report-Only)/',
+		$source,
+		'the header list never names the enforcing policy header'
+	);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 20. The attributes on a cookie that is not the session cookie
+ * ---------------------------------------------------------------------------
+ */
+
+t_group('cookie hardening', function () {
+	$fixture = mcm_fixture('remember-cookie');
+	$server  = mcm_server_start($fixture);
+
+	try {
+		$response = mcm_http($server, '/probe_set_cookie.php');
+		$cookie   = '';
+		foreach (mcm_header_values($response, 'Set-Cookie') as $header) {
+			if (strpos($header, 'rememberme=') === 0) {
+				$cookie = $header;
+			}
+		}
+
+		t_same(200, $response['status'], 'the cookie probe renders');
+		t_ok($cookie !== '', 'a remember-me cookie is issued', mcm_header_text($response));
+		t_matches('/;\s*HttpOnly(;|$)/i', $cookie, 'the remember-me cookie is HttpOnly, so no script can read it');
+		t_matches('/;\s*SameSite=Lax(;|$)/i', $cookie, 'the remember-me cookie is SameSite=Lax');
+		t_matches('/;\s*path=\/(;|$)/i', $cookie, 'the remember-me cookie is still scoped to the whole site');
+		t_matches('/;\s*domain=\.?example\.test(;|$)/i', $cookie, 'the remember-me cookie keeps the configured domain');
+		t_matches('/;\s*expires=/i', $cookie, 'the remember-me cookie still outlives the browser session');
+		t_not_matches('/;\s*secure(;|$)/i', $cookie, 'the remember-me cookie is not secure over plain HTTP');
+
+		// The same cookie on a request the web server terminated TLS for.
+		$response = mcm_http($server, '/probe_set_cookie_https.php');
+		$cookie   = implode('', mcm_header_values($response, 'Set-Cookie'));
+		t_matches('/;\s*secure(;|$)/i', $cookie, 'the remember-me cookie is secure when the request arrived over HTTPS');
+		t_matches('/;\s*HttpOnly(;|$)/i', $cookie, 'the secure cookie is HttpOnly as well');
+	} catch (Exception $exception) {
+		t_ok(false, 'the remember-me cookie cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	// One switch decides this for every cookie the application sets, so a site
+	// that has finished moving to HTTPS pins them all at once.
+	$fixture = mcm_fixture('remember-cookie-secure', array('config' => array(
+		'MCM_SESSION_COOKIE_SECURE'   => true,
+		'MCM_SESSION_COOKIE_SAMESITE' => 'Strict',
+	)));
+	$server = mcm_server_start($fixture);
+	try {
+		$response = mcm_http($server, '/probe_set_cookie.php');
+		$cookies  = implode('', mcm_header_values($response, 'Set-Cookie'));
+		t_matches('/rememberme=[^;]*;[^\n]*;\s*secure(;|$)/i', $cookies, 'a configured secure flag reaches the remember-me cookie too');
+		t_matches('/;\s*SameSite=Strict(;|$)/i', $cookies, 'a configured SameSite reaches the remember-me cookie too');
+	} catch (Exception $exception) {
+		t_ok(false, 'the configured remember-me cookie cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+
+	/* Which code path the attributes are on -------------------------------------- */
+
+	// A response can show that the helper adds the attributes; only the login
+	// code can show that the remember-me cookie goes through the helper. Both
+	// methods are read on their own, so neither can be satisfied by the other.
+	$login = MCM_REPO_ROOT . '/inc/classes/Login.php';
+
+	t_same(1, mcm_method_calls($login, 'newRememberMeCookie', 'mcm_set_cookie'), 'issuing a remember-me cookie goes through the helper');
+	t_same(0, mcm_method_calls($login, 'newRememberMeCookie', 'setcookie'), 'issuing a remember-me cookie sets no bare cookie of its own');
+	t_same(1, mcm_method_calls($login, 'deleteRememberMeCookie', 'mcm_set_cookie'), 'clearing a remember-me cookie goes through the helper');
+	t_same(0, mcm_method_calls($login, 'deleteRememberMeCookie', 'setcookie'), 'clearing a remember-me cookie sets no bare cookie of its own');
+
+	// The helper decides the three protective attributes itself rather than
+	// taking them from the caller, which is what makes the two calls above a
+	// complete account of the cookie a visitor receives.
+	$helper = mcm_function_source(MCM_REPO_ROOT . '/inc/bootstrap.php', 'mcm_set_cookie');
+	t_ok($helper !== '', 'the cookie helper was found in the bootstrap', 'mcm_set_cookie() is not declared there');
+	t_contains('httponly', $helper, 'the helper sets HttpOnly itself');
+	t_contains('MCM_SESSION_COOKIE_SAMESITE', $helper, 'the helper takes SameSite from the configuration');
+	t_contains('mcm_cookie_secure', $helper, 'the helper takes the secure flag from the one place that decides it');
+});

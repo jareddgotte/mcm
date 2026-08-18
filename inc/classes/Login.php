@@ -356,8 +356,12 @@ class Login
             // generate cookie string that consists of userid, randomstring and combined hash of both
             $cookie_string = mcm_remember_me_cookie_value($_SESSION['user_id'], $random_token_string);
 
-            // set cookie
-            setcookie('rememberme', $cookie_string, time() + COOKIE_RUNTIME, "/", COOKIE_DOMAIN);
+            // set cookie. mcm_set_cookie() adds the protective attributes -
+            // HttpOnly, SameSite and, where the configuration or the request
+            // calls for it, Secure - so this cookie carries the same ones the
+            // session cookie does. Name, lifetime, path and domain are
+            // unchanged: a cookie already in a browser has to keep matching.
+            mcm_set_cookie('rememberme', $cookie_string, time() + COOKIE_RUNTIME, "/", COOKIE_DOMAIN);
         }
     }
 
@@ -376,7 +380,9 @@ class Login
         // set the rememberme-cookie to ten years ago (3600sec * 365 days * 10).
         // that's obivously the best practice to kill a cookie via php
         // @see http://stackoverflow.com/a/686166/1114320
-        setcookie('rememberme', false, time() - (3600 * 3650), '/', COOKIE_DOMAIN);
+        // The attributes have to match the ones the cookie was set with, or a
+        // browser keeps the cookie it already has alongside this one.
+        mcm_set_cookie('rememberme', '', time() - (3600 * 3650), '/', COOKIE_DOMAIN);
     }
 
     /**
