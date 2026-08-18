@@ -161,8 +161,36 @@ define("HASH_COST_FACTOR", "10");
 //define('MCM_SESSION_COOKIE_PATH', '/');
 /** SameSite attribute: 'Lax', 'Strict' or 'None'. Applied on PHP 7.3 and newer. */
 //define('MCM_SESSION_COOKIE_SAMESITE', 'Lax');
-/** true marks the session cookie HTTPS-only. Leave undefined to follow the current request. */
+/** true marks cookies HTTPS-only. Leave undefined to follow the current request. */
 //define('MCM_SESSION_COOKIE_SECURE', true);
+
+/**
+ * Configuration for: baseline response headers
+ *
+ * Every response carries a small set of headers describing how a browser should
+ * treat what it was given: it may not guess a response's type, other sites may
+ * not frame these pages, a cross-origin request is told this origin and no
+ * more, and device features no page here uses stay switched off.
+ *
+ * Alongside them goes a content security policy, and it is sent REPORT-ONLY.
+ * That means a browser reports what the policy would have stopped and then
+ * loads the page anyway, so the policy cannot break anything while it is being
+ * read. The default policy describes what the pages already do - inline scripts
+ * and styles, the two content delivery networks the markup names, poster images
+ * from TMDb, the search endpoint and the trailer video host. Replace it here if
+ * your site loads something else, or set it to '' to leave the header off.
+ *
+ * TO SWITCH ALL OF THIS OFF: uncomment the MCM_SECURITY_HEADERS line below and
+ * set it to false. The next request carries no baseline headers, with no code
+ * change and nothing to change beyond this file.
+ */
+
+/** false stops all of the baseline headers, the content policy included. */
+//define('MCM_SECURITY_HEADERS', false);
+/** the content policy, only ever sent report-only. '' leaves the header off. */
+//define('MCM_CONTENT_SECURITY_POLICY', "default-src 'self'");
+/** where a browser posts policy reports. Empty leaves them in the console. */
+//define('MCM_CSP_REPORT_URI', 'https://example.com/csp-report');
 
 /**
  * Configuration for: canonical host and HTTPS

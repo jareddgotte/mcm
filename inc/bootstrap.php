@@ -8,9 +8,10 @@
  *   1. installing the error, exception and shutdown handlers;
  *   2. loading inc/security.php, the shared security primitives;
  *   3. loading configuration, on top of safe defaults;
- *   4. sending a plain-HTTP request on to the canonical HTTPS origin;
- *   5. starting the one and only session;
- *   6. handing out database connections, and deciding what a database failure
+ *   4. putting the baseline security headers on the response;
+ *   5. sending a plain-HTTP request on to the canonical HTTPS origin;
+ *   6. starting the one and only session;
+ *   7. handing out database connections, and deciding what a database failure
  *      does to the request.
  *
  * The file is inert on its own: nothing happens until an entry point includes
@@ -18,7 +19,8 @@
  *
  * Nothing here changes what a successful request produces. It only decides
  * what happens when configuration is missing, what happens when something
- * fails, and which attributes the session cookie carries.
+ * fails, which attributes the cookies carry, and which headers describe the
+ * response to the browser.
  */
 
 // Second and later includes in the same request stop right here.
@@ -642,6 +644,191 @@ function mcm_list_name_error($name)
 
 /*
  * ---------------------------------------------------------------------------
+ * Cookies and response headers
+ * ---------------------------------------------------------------------------
+ *
+ * Two settings decide what protective attributes a cookie carries, and they
+ * decide it for every cookie this application sets - the session cookie and the
+ * remember-me cookie alike. They keep the names they were introduced under,
+ * MCM_SESSION_COOKIE_SECURE and MCM_SESSION_COOKIE_SAMESITE, because a site
+ * that already set them in its own configuration would otherwise silently lose
+ * the value on the next deployment.
+ */
+
+/**
+ * Whether a cookie this application sets should be marked HTTPS-only.
+ *
+ * The configured value wins. Leaving it undefined follows the request the
+ * cookie is going out on, which is what lets a site that still answers on plain
+ * HTTP keep working while it moves across: a cookie is marked secure exactly
+ * when marking it secure would not immediately make it unusable.
+ *
+ * @return bool
+ */
+function mcm_cookie_secure()
+{
+	return (MCM_SESSION_COOKIE_SECURE === null)
+		? mcm_request_is_https()
+		: (bool) MCM_SESSION_COOKIE_SECURE;
+}
+
+/**
+ * Set one cookie with this application's protective attributes.
+ *
+ * Every cookie the application sets other than the session cookie goes through
+ * here, so HttpOnly, Secure and SameSite are decided in one place rather than
+ * at each call site. The session cookie is the one exception and only because
+ * PHP issues it itself, from the parameters handed to
+ * session_set_cookie_params() below, which are the same three values.
+ *
+ * The caller still chooses name, value, expiry, path and domain: those carry
+ * meaning that differs per cookie, and changing the remember-me cookie's domain
+ * would sign out every browser holding one.
+ *
+ * @param string $name
+ * @param string $value
+ * @param int    $expires unix time the cookie expires at; 0 means "at the end
+ *                        of the browser session"
+ * @param string $path
+ * @param string $domain  '' keeps the cookie host-only
+ * @return bool whether the header could still be sent
+ */
+function mcm_set_cookie($name, $value, $expires = 0, $path = '/', $domain = '')
+{
+	if (PHP_VERSION_ID >= 70300) {
+		return setcookie($name, $value, array(
+			'expires'  => (int) $expires,
+			'path'     => $path,
+			'domain'   => $domain,
+			'secure'   => mcm_cookie_secure(),
+			'httponly' => true,
+			'samesite' => MCM_SESSION_COOKIE_SAMESITE,
+		));
+	}
+
+	// SameSite has no parameter of its own before PHP 7.3; the remaining
+	// attributes are still applied, exactly as they are for the session cookie.
+	return setcookie($name, $value, (int) $expires, $path, $domain, mcm_cookie_secure(), true);
+}
+
+/**
+ * The content security policy the site describes itself with.
+ *
+ * It is a description of what the pages already do, not a restriction on them:
+ * the two content delivery networks the markup has always named, the inline
+ * script and style blocks the views are built out of, poster images from
+ * whichever address TMDb hands back at runtime, the search endpoint the
+ * type-ahead calls, and the video host the trailer dialog frames. Sending it
+ * anywhere other than report-only would be a change of behaviour and is a
+ * deliberate separate step; see mcm_security_headers().
+ *
+ * A site can replace it wholesale by defining MCM_CONTENT_SECURITY_POLICY in
+ * its own configuration, or switch it off with an empty string.
+ *
+ * @return string
+ */
+function mcm_default_content_security_policy()
+{
+	return implode('; ', array(
+		"default-src 'self'",
+		// The pages carry inline <script> blocks and load jQuery and Bootstrap
+		// from these two hosts. A host with no scheme matches both http and
+		// https, which is what the protocol-relative src attributes need.
+		// 'unsafe-eval' is here because the search box compiles its suggestion
+		// template with Handlebars, which builds the template into a function;
+		// it comes back out when those templates are compiled ahead of time.
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval' ajax.googleapis.com netdna.bootstrapcdn.com",
+		"style-src 'self' 'unsafe-inline' netdna.bootstrapcdn.com",
+		"font-src 'self' data: netdna.bootstrapcdn.com",
+		// Poster addresses are built on a base URL TMDb returns at run time, so
+		// the host cannot be named here without breaking the day TMDb moves it.
+		"img-src 'self' data: http: https:",
+		"connect-src 'self' api.themoviedb.org",
+		"frame-src www.youtube.com",
+		// 'self' rather than 'none': the signed-in page still loads a Flash
+		// clipboard shim from this origin. No browser runs it any more, and the
+		// day that library goes this can be 'none'.
+		"object-src 'self'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'self'",
+	));
+}
+
+/**
+ * The baseline headers every response carries, as name => value.
+ *
+ * All four of the fixed ones describe how a browser should treat a response it
+ * has already been given, and none of them can refuse a request the site would
+ * otherwise have served:
+ *
+ *   X-Content-Type-Options  a response is the type it says it is
+ *   X-Frame-Options         other sites may not frame these pages
+ *   Referrer-Policy         a cross-origin request is told the origin only
+ *   Permissions-Policy      device features no page here uses stay off
+ *
+ * The content policy is the one that could break a page, so it goes out
+ * report-only: a browser reports what the policy would have stopped and loads
+ * it anyway. The header name is fixed here rather than configurable, so no
+ * configuration value can turn a description into an enforcement.
+ *
+ * @return array
+ */
+function mcm_security_headers()
+{
+	$headers = array(
+		'X-Content-Type-Options' => 'nosniff',
+		'X-Frame-Options'        => 'SAMEORIGIN',
+		'Referrer-Policy'        => 'strict-origin-when-cross-origin',
+		'Permissions-Policy'     => 'camera=(), geolocation=(), microphone=(), payment=()',
+	);
+
+	$policy = trim((string) MCM_CONTENT_SECURITY_POLICY);
+	if ($policy === '') {
+		return $headers;
+	}
+
+	$report = trim((string) MCM_CSP_REPORT_URI);
+	if ($report !== '') {
+		// A policy is one header value with ";" between its directives, so an
+		// address containing a separator would silently become a directive of
+		// its own rather than a report address.
+		if (strcspn($report, " \t;,\r\n\0") === strlen($report)) {
+			$policy .= '; report-uri ' . $report;
+		} else {
+			mcm_log('Configuration', 'MCM_CSP_REPORT_URI is not a usable address, so no report address is sent');
+		}
+	}
+
+	$headers['Content-Security-Policy-Report-Only'] = $policy;
+
+	return $headers;
+}
+
+/**
+ * Put the baseline headers on this response.
+ *
+ * Called once from the bootstrap, ahead of everything that can produce output,
+ * so every entry point is covered - the pages a signed-in visitor sees, the
+ * public ones, the captcha image, the JSON endpoints and the redirects alike -
+ * without any of them having to remember to ask.
+ */
+function mcm_send_security_headers()
+{
+	if (PHP_SAPI === 'cli' || !MCM_SECURITY_HEADERS || headers_sent()) {
+		return;
+	}
+
+	foreach (mcm_security_headers() as $name => $value) {
+		// A header value ends at the first control character; PHP would refuse
+		// the whole call rather than truncate it, and a configured policy is the
+		// one value here the application did not write itself.
+		header($name . ': ' . substr($value, 0, strcspn($value, "\r\n\0")), true);
+	}
+}
+
+/*
+ * ---------------------------------------------------------------------------
  * 1. Error behaviour, before anything else
  * ---------------------------------------------------------------------------
  *
@@ -712,8 +899,19 @@ $mcm_defaults = array(
 	'MCM_SESSION_COOKIE_PATH'     => '/',
 	'MCM_SESSION_COOKIE_SAMESITE' => 'Lax',
 	// null means "secure when the request came in over HTTPS". Set it to true
-	// once the site is HTTPS-only.
+	// once the site is HTTPS-only. This and the SameSite setting above govern
+	// every cookie the application sets, not only the session cookie.
 	'MCM_SESSION_COOKIE_SECURE'   => null,
+	// The baseline response headers. false takes all of them back off again,
+	// including the content policy, with no code change.
+	'MCM_SECURITY_HEADERS'        => true,
+	// The content policy, which is only ever sent report-only. An empty string
+	// leaves the header off; any other value replaces the default wholesale.
+	'MCM_CONTENT_SECURITY_POLICY' => mcm_default_content_security_policy(),
+	// Where a browser posts what the policy would have stopped. Empty means the
+	// reports stay in the visitor's own console, which is enough to read them
+	// from during the move.
+	'MCM_CSP_REPORT_URI'          => '',
 	// The one host the application is willing to name in a redirect, e.g.
 	// "example.com". Empty means none is configured and redirects stay
 	// relative; either way the request's Host header is never used.
@@ -770,7 +968,29 @@ if (MCM_ERROR_LOG !== '') {
 
 /*
  * ---------------------------------------------------------------------------
- * 3. HTTPS
+ * 3. Baseline response headers
+ * ---------------------------------------------------------------------------
+ *
+ * Sent here, before anything can produce output and before the HTTPS redirect
+ * below exits, so every response the application makes carries them - a page, a
+ * JSON refusal, the captcha image, a redirect.
+ *
+ * The content policy among them is report-only on purpose. The pages this site
+ * has always served use inline scripts, inline styles and two content delivery
+ * networks, and deployment here is manual, so a policy that refused any of that
+ * would take the site down until somebody noticed. Report-only asks browsers to
+ * say what an enforced policy would have stopped and to load the page anyway.
+ *
+ * Strict transport security is deliberately not among these headers, for the
+ * same reason the HTTPS redirect below is a temporary one: a browser remembers
+ * it for far longer than it would take to want it back.
+ */
+
+mcm_send_security_headers();
+
+/*
+ * ---------------------------------------------------------------------------
+ * 4. HTTPS
  * ---------------------------------------------------------------------------
  *
  * A plain-HTTP request is sent on to the same address on the canonical HTTPS
@@ -807,7 +1027,7 @@ if (PHP_SAPI !== 'cli' && !mcm_request_is_https() && mcm_https_is_enforced()) {
 
 /*
  * ---------------------------------------------------------------------------
- * 4. Session
+ * 5. Session
  * ---------------------------------------------------------------------------
  *
  * This is the only session_start() in the application. Entry points and the
@@ -821,9 +1041,8 @@ if (PHP_SAPI !== 'cli' && !mcm_request_is_https() && mcm_https_is_enforced()) {
 @ini_set('session.use_strict_mode', '1');
 @ini_set('session.use_trans_sid', '0');
 
-$mcm_cookie_secure = (MCM_SESSION_COOKIE_SECURE === null)
-	? mcm_request_is_https()
-	: (bool) MCM_SESSION_COOKIE_SECURE;
+// The same decision mcm_set_cookie() makes for the remember-me cookie.
+$mcm_cookie_secure = mcm_cookie_secure();
 
 if (PHP_VERSION_ID >= 70300) {
 	session_set_cookie_params(array(

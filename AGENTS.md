@@ -104,6 +104,20 @@ the application. Setup is documented in `README.md`.
   `define('MCM_FORCE_HTTPS', false)` has to be able to take it back. Strict
   transport security is deliberately absent for the same reason and the suite
   asserts it stays absent.
+- Baseline response headers go out from the bootstrap, before the HTTPS
+  redirect can exit, so every response carries them - page, JSON refusal,
+  captcha image, redirect. The content policy among them is sent REPORT-ONLY
+  and the report-only header name is fixed in `mcm_security_headers()` rather
+  than configurable, so no setting can turn a description into an enforcement.
+  The policy describes what the pages already do, `'unsafe-eval'` and
+  `object-src 'self'` included; a policy that reported on every page view would
+  be read once and ignored. `MCM_SECURITY_HEADERS` takes all of it back off.
+- Every cookie other than the session cookie goes through `mcm_set_cookie()`,
+  which decides HttpOnly, SameSite and Secure itself from the same two settings
+  the session cookie uses. A cookie's attributes must be asserted off that
+  cookie's own `Set-Cookie` line (`mcm_cookie_header()` in `tests/run.php`): the
+  session cookie in the same response carries those attributes too, so a pattern
+  run across every header joined together passes either way.
 - Configuration is layered: `inc/config/config.php` (untracked, real values)
   wins, and the bootstrap fills in safe defaults for anything it omits.
   `inc/config/example_config.php` is tracked and must only ever hold
