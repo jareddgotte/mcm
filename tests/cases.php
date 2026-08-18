@@ -4392,3 +4392,526 @@ t_group('tmdb credential hygiene in the source', function () {
 	t_same(1, mcm_count_calls($client, 'curl_init'), 'the client opens exactly one handle, in one place');
 	t_same(1, mcm_count_calls($client, 'curl_close'), 'the handle holding the credential is closed again');
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * The TMDb proxy
+ * ---------------------------------------------------------------------------
+ *
+ * tmdb.php exposes five read-only operations and nothing else. The cases below
+ * drive it as real requests, over two built-in servers on the loopback
+ * interface: one serving the application and one serving
+ * tests/pages/tmdb_stub.php as the far end. Two servers rather than one because
+ * PHP's built-in server answers a single request at a time, so a proxy request
+ * that had to reach a stub on its own server would wait for itself.
+ *
+ * The stub appends every request it receives to tmdb_stub_requests.log, which
+ * is what makes two of this issue's claims checkable at all: "refused before any
+ * outbound request" is that file staying empty, and "one cache miss and then a
+ * hit" is that file holding exactly one line after two fresh sessions.
+ */
+
+/**
+ * A fixture with the application on one server and the stub on another, already
+ * pointed at each other.
+ *
+ * @return array fixture, app, stub - the last two as mcm_server_start() returns
+ */
+function mcm_tmdb_proxy_fixture($name)
+{
+	$fixture = mcm_fixture($name);
+	$app     = mcm_server_start($fixture);
+	$stub    = mcm_server_start($fixture);
+
+	mcm_tmdb_configure($fixture, array(
+		'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+		// The cache is this fixture's own, so a run never reads or writes an
+		// answer another fixture - or another developer's checkout - left in the
+		// system temporary directory.
+		'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+	));
+
+	return array('fixture' => $fixture, 'app' => $app, 'stub' => $stub);
+}
+
+/** Stop both servers of a proxy fixture. */
+function mcm_tmdb_proxy_stop(array $bundle)
+{
+	mcm_server_stop($bundle['app']);
+	mcm_server_stop($bundle['stub']);
+}
+
+/** Forget every request the stub has received so far. */
+function mcm_tmdb_stub_reset(array $fixture)
+{
+	@unlink($fixture['public'] . '/tmdb_stub_requests.log');
+}
+
+/** The requests the stub has received, one "METHOD uri" line each. */
+function mcm_tmdb_stub_requests(array $fixture)
+{
+	$path = $fixture['public'] . '/tmdb_stub_requests.log';
+	if (!is_file($path)) {
+		return array();
+	}
+
+	$lines = array();
+	foreach (explode("\n", file_get_contents($path)) as $line) {
+		if (trim($line) !== '') {
+			$lines[] = trim($line);
+		}
+	}
+	return $lines;
+}
+
+/** A response body decoded as JSON, or an empty array when it is not JSON. */
+function mcm_json_body(array $response)
+{
+	$decoded = json_decode($response['body'], true);
+
+	return is_array($decoded) ? $decoded : array();
+}
+
+/**
+ * Every key path in a decoded body, sorted: "data.images.base_url",
+ * "data.results[].title" and so on.
+ *
+ * A snapshot of these is what says no upstream field leaked: it names what the
+ * body actually holds, all the way down, rather than looking for the handful of
+ * fields somebody thought to check for.
+ */
+function mcm_key_paths($value, $prefix = '')
+{
+	$paths = array();
+	if (!is_array($value)) {
+		return $paths;
+	}
+
+	foreach ($value as $key => $item) {
+		$name = is_int($key) ? $prefix . '[]' : (($prefix === '') ? (string) $key : $prefix . '.' . $key);
+		if (is_array($item) && count($item) > 0) {
+			$paths = array_merge($paths, mcm_key_paths($item, $name));
+		} else {
+			$paths[] = $name;
+		}
+	}
+
+	$paths = array_values(array_unique($paths));
+	sort($paths);
+
+	return $paths;
+}
+
+/** The lines the proxy itself wrote to the log, and only those. */
+function mcm_tmdb_proxy_log_lines($log)
+{
+	$found = array();
+	foreach (explode("\n", $log) as $line) {
+		if (strpos($line, 'TMDb proxy') !== false || strpos($line, 'Refused request') !== false) {
+			$found[] = $line;
+		}
+	}
+	return implode("\n", $found);
+}
+
+t_group('tmdb proxy allowlist and validation', function () {
+	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-allowlist');
+	$fixture = $bundle['fixture'];
+
+	try {
+		// Every one of these must be refused, and refused before anything goes
+		// out: the assertion after the loop is the one that says so.
+		$refused = array(
+			'no operation at all'                => array(),
+			'an unknown operation'               => array('operation' => 'account'),
+			'an operation that only looks known' => array('operation' => 'configuration '),
+			'an operation differing in case'     => array('operation' => 'Configuration'),
+			'a write operation'                  => array('operation' => 'rate', 'movie_id' => '550'),
+			'an authentication operation'        => array('operation' => 'authentication_token'),
+			'an operation given as an array'     => array('operation' => array('configuration')),
+			'a movie with no identifier'         => array('operation' => 'movie'),
+			'a movie identifier of zero'         => array('operation' => 'movie', 'movie_id' => '0'),
+			'a negative movie identifier'        => array('operation' => 'movie', 'movie_id' => '-5'),
+			'a movie identifier that is a word'  => array('operation' => 'movie', 'movie_id' => 'latest'),
+			'a movie identifier with a comment'  => array('operation' => 'movie', 'movie_id' => '550 OR 1=1'),
+			'a movie identifier with a path'     => array('operation' => 'movie', 'movie_id' => '550/../../configuration'),
+			'a movie identifier past the bound'  => array('operation' => 'movie', 'movie_id' => '99999999999999999999'),
+			'a videos request with no movie'     => array('operation' => 'videos'),
+			'a videos identifier that is a path' => array('operation' => 'videos', 'movie_id' => '../../account'),
+			'a search with no query'             => array('operation' => 'search'),
+			'a search with an empty query'       => array('operation' => 'search', 'query' => ''),
+			'a search that is only spaces'       => array('operation' => 'search', 'query' => '   '),
+			'a search query past the cap'        => array('operation' => 'search', 'query' => str_repeat('a', 201)),
+			'a search query holding a newline'   => array('operation' => 'search', 'query' => "alien\r\nX-Injected: 1"),
+			'a search query that is not UTF-8'   => array('operation' => 'search', 'query' => "alien\xff\xfe"),
+			'a search page of zero'              => array('operation' => 'search', 'query' => 'alien', 'page' => '0'),
+			'a search page past the last one'    => array('operation' => 'search', 'query' => 'alien', 'page' => '501'),
+			'a search page that is a word'       => array('operation' => 'search', 'query' => 'alien', 'page' => 'last'),
+			'a list with no identifier'          => array('operation' => 'list'),
+			'a list identifier that is a path'   => array('operation' => 'list', 'list_id' => '../../etc/passwd'),
+			'a list identifier that is a URL'    => array('operation' => 'list', 'list_id' => 'https://evil.example.com/x'),
+			'a list identifier of the wrong size' => array('operation' => 'list', 'list_id' => str_repeat('a', 100)),
+			'a list identifier holding a slash'  => array('operation' => 'list', 'list_id' => '5212934a760ee36af148/407c'),
+			// The fields that would have made this a general-purpose fetcher.
+			'a caller-supplied URL'              => array('operation' => 'configuration', 'url' => 'https://evil.example.com/'),
+			'a caller-supplied host'             => array('operation' => 'configuration', 'host' => 'evil.example.com'),
+			'a caller-supplied path'             => array('operation' => 'configuration', 'path' => '/account'),
+			'a caller-supplied method'           => array('operation' => 'configuration', 'method' => 'POST'),
+			'a caller-supplied api key'          => array('operation' => 'configuration', 'api_key' => 'abc'),
+			'a caller-supplied bearer token'     => array('operation' => 'configuration', 'authorization' => 'Bearer abc'),
+			'a caller-supplied session id'       => array('operation' => 'configuration', 'session_id' => 'abc'),
+			'a caller-supplied timeout'          => array('operation' => 'configuration', 'timeout' => '600000'),
+			'a caller-supplied language'         => array('operation' => 'search', 'query' => 'alien', 'language' => 'en'),
+			'a field belonging to another one'   => array('operation' => 'movie', 'movie_id' => '550', 'query' => 'alien'),
+		);
+
+		mcm_tmdb_stub_reset($fixture);
+		foreach ($refused as $description => $fields) {
+			$response = mcm_http($bundle['app'], '/tmdb.php?' . http_build_query($fields));
+			$body     = mcm_json_body($response);
+			t_same(400, $response['status'], 'the proxy refuses ' . $description);
+			t_same('bad_request', isset($body['error']) ? $body['error'] : '', 'the refusal of ' . $description . ' carries the shared bounded body');
+			t_same(array('error', 'message'), array_keys($body), 'the refusal of ' . $description . ' carries nothing else');
+		}
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'not one refused request reached the endpoint');
+
+		// A refusal says which value it refused to the log, and to nowhere else.
+		$response = mcm_http($bundle['app'], '/tmdb.php?' . http_build_query(array('operation' => 'movie', 'movie_id' => 'not-a-number')));
+		t_contains('not-a-number', $response['log'], 'the refused value reaches the log');
+		t_lacks('not-a-number', $response['body'], 'the refused value does not come back in the response');
+		t_lacks('not-a-number', mcm_header_text($response), 'the refused value reaches no response header');
+
+		// A POST is served exactly as a GET is, and reads its fields from the
+		// body; anything else is refused by method.
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($bundle['app'], '/tmdb.php', array('operation' => 'movie', 'movie_id' => '550'));
+		$body     = mcm_json_body($response);
+		t_same(200, $response['status'], 'a POST is served');
+		t_same(550, isset($body['data']['id']) ? $body['data']['id'] : 0, 'the POST body is where a POST reads its fields');
+
+		// A GET's query string is not read on a POST, so a value cannot arrive
+		// by a route the request did not use.
+		$response = mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=550', array(), 'POST', '');
+		t_same(400, $response['status'], 'a POST carrying its fields only in the query string is refused');
+
+		mcm_tmdb_stub_reset($fixture);
+		foreach (array('PUT', 'DELETE', 'PATCH') as $method) {
+			$response = mcm_http($bundle['app'], '/tmdb.php?operation=configuration', array(), $method, '');
+			$body     = mcm_json_body($response);
+			t_same(405, $response['status'], 'a ' . $method . ' is refused');
+			t_same('method_not_allowed', isset($body['error']) ? $body['error'] : '', 'the ' . $method . ' refusal carries the shared bounded body');
+			t_contains('GET, POST', implode(' ', mcm_header_values($response, 'Allow')), 'the ' . $method . ' refusal says which methods there are');
+		}
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'no refused method reached the endpoint either');
+	} catch (Exception $error) {
+		mcm_tmdb_proxy_stop($bundle);
+		throw $error;
+	}
+	mcm_tmdb_proxy_stop($bundle);
+});
+
+t_group('tmdb proxy operations and projection', function () {
+	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-operations');
+	$fixture = $bundle['fixture'];
+	$token   = mcm_tmdb_test_token();
+
+	// What each operation may answer with, to the field. A key that is not on
+	// this list is a field this site never agreed to repeat.
+	$expected = array(
+		'configuration' => array(
+			'request' => array('operation' => 'configuration'),
+			'paths'   => array('data.images.base_url', 'data.images.poster_sizes[]', 'data.images.secure_base_url', 'ok', 'operation'),
+		),
+		'search' => array(
+			'request' => array('operation' => 'search', 'query' => 'fight club', 'page' => '2'),
+			'paths'   => array(
+				'data.page', 'data.results[].id', 'data.results[].original_title', 'data.results[].poster_path',
+				'data.results[].release_date', 'data.results[].title', 'data.total_pages', 'data.total_results',
+				'ok', 'operation',
+			),
+		),
+		'movie' => array(
+			'request' => array('operation' => 'movie', 'movie_id' => '550'),
+			'paths'   => array(
+				'data.genres[].id', 'data.genres[].name', 'data.id', 'data.imdb_id', 'data.original_title',
+				'data.overview', 'data.poster_path', 'data.release_date', 'data.runtime', 'data.title',
+				'ok', 'operation',
+			),
+		),
+		'videos' => array(
+			'request' => array('operation' => 'videos', 'movie_id' => '550'),
+			'paths'   => array(
+				'data.id', 'data.results[].id', 'data.results[].key', 'data.results[].name',
+				'data.results[].official', 'data.results[].site', 'data.results[].size', 'data.results[].type',
+				'ok', 'operation',
+			),
+		),
+		'list' => array(
+			'request' => array('operation' => 'list', 'list_id' => '5212934a760ee36af148407c'),
+			'paths'   => array(
+				'data.description', 'data.id', 'data.item_count', 'data.items[].id',
+				'data.items[].original_title', 'data.items[].poster_path', 'data.items[].release_date',
+				'data.items[].title', 'data.name', 'ok', 'operation',
+			),
+		),
+	);
+
+	try {
+		foreach ($expected as $operation => $case) {
+			mcm_tmdb_stub_reset($fixture);
+			$response = mcm_http($bundle['app'], '/tmdb.php?' . http_build_query($case['request']));
+			$body     = mcm_json_body($response);
+
+			t_same(200, $response['status'], 'the ' . $operation . ' operation is served');
+			t_same($operation, isset($body['operation']) ? $body['operation'] : '', 'the answer says which operation it is');
+			t_same(true, isset($body['ok']) ? $body['ok'] : false, 'the ' . $operation . ' answer says it succeeded');
+			t_contains('application/json', implode(' ', mcm_header_values($response, 'Content-Type')), 'the ' . $operation . ' answer is JSON');
+
+			// The snapshot: every field the body holds, and no other.
+			t_same($case['paths'], mcm_key_paths($body), 'the ' . $operation . ' answer holds exactly the projected fields');
+
+			// And what the projection dropped really was there to drop.
+			t_lacks('upstream-only-marker', $response['body'], 'no unprojected upstream field survives the ' . $operation . ' projection');
+			t_lacks('stub-payload-marker', $response['body'], 'no unprojected upstream field survives the ' . $operation . ' projection, top level included');
+			t_lacks($token, $response['body'], 'the ' . $operation . ' answer carries no credential');
+			t_lacks($token, mcm_header_text($response), 'the ' . $operation . ' headers carry no credential');
+			t_lacks('127.0.0.1', $response['body'], 'the ' . $operation . ' answer names no upstream URL');
+
+			// Exactly one outbound request, and it went where this site decided.
+			$requests = mcm_tmdb_stub_requests($fixture);
+			t_same(1, count($requests), 'the ' . $operation . ' operation made exactly one outbound request');
+			t_contains('GET /tmdb_stub.php', isset($requests[0]) ? $requests[0] : '', 'the outbound request is a GET');
+		}
+
+		// Values that came back, not only field names.
+		$body = mcm_json_body(mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=550'));
+		t_same(550, $body['data']['id'], 'the movie identifier comes back as a number');
+		t_same('Fight Club', $body['data']['title'], 'the title comes back');
+		t_same(139, $body['data']['runtime'], 'the runtime comes back as a number');
+		t_same('tt0137523', $body['data']['imdb_id'], 'the IMDb identifier comes back');
+		t_same(array(array('id' => 18, 'name' => 'Drama')), $body['data']['genres'], 'a genre keeps its two fields and loses the rest');
+
+		$body = mcm_json_body(mcm_http($bundle['app'], '/tmdb.php?operation=videos&movie_id=550'));
+		t_same('BdJKm16Co6M', $body['data']['results'][0]['key'], "the video's key comes back");
+		t_same(1080, $body['data']['results'][0]['size'], 'the size comes back as the number the current response uses');
+		t_same(true, $body['data']['results'][0]['official'], 'the official flag comes back as a flag');
+
+		$body = mcm_json_body(mcm_http($bundle['app'], '/tmdb.php?operation=configuration'));
+		t_same('http://image.tmdb.org/t/p/', $body['data']['images']['base_url'], 'the image base URL comes back');
+		t_same(array('w92', 'w154', 'w185'), $body['data']['images']['poster_sizes'], 'the poster sizes come back');
+
+		// The values the request carried are normalised on the way out, and the
+		// query the endpoint saw is this site's, not the caller's.
+		mcm_tmdb_stub_reset($fixture);
+		mcm_http($bundle['app'], '/tmdb.php?' . http_build_query(array('operation' => 'search', 'query' => '  fight club  ', 'page' => '2')));
+		$requests = mcm_tmdb_stub_requests($fixture);
+		$sent     = isset($requests[0]) ? $requests[0] : '';
+		t_contains('/search/movie', $sent, 'a search asks for the search path');
+		t_contains('query=fight%20club', $sent, 'the search phrase is trimmed and encoded');
+		t_contains('page=2', $sent, 'the page the caller asked for is the page that was asked for');
+		t_contains('include_adult=false', $sent, "the site's own fixed parameter goes out with it");
+		t_lacks('api_key', $sent, 'no credential is in the outbound URL');
+
+		// A search with no page is the first page, decided here rather than by
+		// whatever the endpoint would default to.
+		mcm_tmdb_stub_reset($fixture);
+		mcm_http($bundle['app'], '/tmdb.php?' . http_build_query(array('operation' => 'search', 'query' => 'alien')));
+		$requests = mcm_tmdb_stub_requests($fixture);
+		t_contains('page=1', isset($requests[0]) ? $requests[0] : '', 'a search with no page asks for the first one');
+	} catch (Exception $error) {
+		mcm_tmdb_proxy_stop($bundle);
+		throw $error;
+	}
+	mcm_tmdb_proxy_stop($bundle);
+});
+
+t_group('tmdb proxy configuration cache', function () {
+	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-cache');
+	$fixture = $bundle['fixture'];
+	$token   = mcm_tmdb_test_token();
+	$cache   = $fixture['root'] . '/cache';
+
+	try {
+		mcm_tmdb_stub_reset($fixture);
+
+		// Two fresh anonymous browsers. Neither carries a cookie, so each gets a
+		// session of its own - which is exactly the case a per-session cache
+		// could not help with, and the reason this one is shared.
+		$first  = mcm_http($bundle['app'], '/tmdb.php?operation=configuration');
+		$second = mcm_http($bundle['app'], '/tmdb.php?operation=configuration');
+
+		t_same(200, $first['status'], 'the first session is served the configuration');
+		t_same(200, $second['status'], 'the second session is served the configuration');
+		t_same($first['body'], $second['body'], 'both sessions are served the same answer');
+		t_same(2, count(mcm_session_files($fixture)), 'the two requests really were two fresh sessions');
+
+		// The whole claim, in one assertion: two sessions, one outbound request.
+		t_same(1, count(mcm_tmdb_stub_requests($fixture)), 'two fresh sessions cost exactly one request to the endpoint');
+		t_contains('cache miss', $first['log'], 'the first session missed the cache and said so in the log');
+		t_lacks('cache miss', $second['log'], 'the second session hit the cache');
+
+		// A third, still inside the day.
+		$third = mcm_http($bundle['app'], '/tmdb.php?operation=configuration');
+		t_same($first['body'], $third['body'], 'a third session is served the same answer again');
+		t_same(1, count(mcm_tmdb_stub_requests($fixture)), 'and still only one request has gone out');
+
+		// What is on disk: one small file, private to this account, holding the
+		// projection and neither the credential nor an upstream field.
+		$files = glob($cache . '/*.json');
+		t_same(1, count($files), 'the cache is one file');
+		$stored = file_get_contents($files[0]);
+		t_ok(strlen($stored) < 65536, 'the cache file is bounded', strlen($stored) . ' bytes');
+		t_same('0600', substr(sprintf('%o', fileperms($files[0])), -4), 'the cache file is readable only by this account');
+		t_same('0700', substr(sprintf('%o', fileperms($cache)), -4), 'the cache directory is private');
+		t_contains('image.tmdb.org', $stored, 'the cache really holds the answer');
+		t_lacks($token, $stored, 'the cache holds no credential');
+		t_lacks('stub-payload-marker', $stored, 'the cache holds the projection rather than the upstream body');
+		t_lacks('upstream-only-marker', $stored, 'the cache holds no unprojected upstream field');
+
+		// Nothing about where it is kept reaches a client.
+		t_lacks($cache, $first['body'], 'the answer does not name the cache directory');
+		t_lacks($cache, mcm_header_text($first), 'no response header names the cache directory');
+		t_lacks('/tmp', $first['body'], 'the answer names no local path at all');
+
+		// Past the day, the answer is fetched again. The stored moment is moved
+		// back rather than the suite waiting a day for it.
+		$held = json_decode($stored, true);
+		t_ok(isset($held['stored'], $held['data']), 'the cache file holds a stored moment and the answer');
+		$held['stored'] = time() - (86400 + 60);
+		file_put_contents($files[0], json_encode($held));
+
+		$fourth = mcm_http($bundle['app'], '/tmdb.php?operation=configuration');
+		t_same(200, $fourth['status'], 'a request after the day is still served');
+		t_same(2, count(mcm_tmdb_stub_requests($fixture)), 'an answer older than a day is fetched again');
+		t_contains('cache miss', $fourth['log'], 'and the miss is logged');
+
+		// A cache file that is not what this site wrote is ignored rather than
+		// trusted: no answer at all is better than somebody else's.
+		file_put_contents($files[0], 'not json at all');
+		mcm_http($bundle['app'], '/tmdb.php?operation=configuration');
+		t_same(3, count(mcm_tmdb_stub_requests($fixture)), 'an unreadable cache file costs a request rather than an answer');
+
+		// Only the configuration is cached; the other four are not.
+		mcm_tmdb_stub_reset($fixture);
+		mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=550');
+		mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=550');
+		t_same(2, count(mcm_tmdb_stub_requests($fixture)), 'a movie is fetched every time it is asked for');
+		t_same(1, count(glob($cache . '/*.json')), 'and nothing but the configuration is kept');
+	} catch (Exception $error) {
+		mcm_tmdb_proxy_stop($bundle);
+		throw $error;
+	}
+	mcm_tmdb_proxy_stop($bundle);
+});
+
+t_group('tmdb proxy upstream failures', function () {
+	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-failures');
+	$fixture = $bundle['fixture'];
+	$token   = mcm_tmdb_test_token();
+
+	try {
+		// The stub answers these identifiers with a status rather than a film,
+		// and puts a marker in the body it sends with it.
+		$cases = array(
+			'404' => array('movie_id' => '404', 'status' => 502),
+			'429' => array('movie_id' => '429', 'status' => 502),
+			'500' => array('movie_id' => '500', 'status' => 502),
+		);
+
+		foreach ($cases as $upstream => $case) {
+			$response = mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=' . $case['movie_id']);
+			$body     = mcm_json_body($response);
+
+			t_same($case['status'], $response['status'], 'an upstream ' . $upstream . ' is answered with a bounded status');
+			t_same(array('error', 'message'), array_keys($body), 'the upstream ' . $upstream . ' failure carries a category and a message and nothing else');
+			t_same('upstream', $body['error'], 'the upstream ' . $upstream . ' failure names the category');
+			t_lacks('upstream-body-marker', $response['body'], 'the upstream ' . $upstream . ' body does not reach the client');
+			t_lacks($upstream, $body['message'], 'the upstream ' . $upstream . ' status is not quoted in the message');
+			t_lacks('127.0.0.1', $response['body'], 'the upstream ' . $upstream . ' failure names no URL');
+			t_lacks($token, $response['body'], 'the upstream ' . $upstream . ' failure names no credential');
+			t_lacks($token, $response['log'], 'and the log of it names no credential either');
+			t_contains('TMDb request failed', $response['log'], 'the reason for the upstream ' . $upstream . ' failure reaches the log');
+		}
+
+		// A site with no token configured sends nothing and says so as a
+		// configuration failure rather than as an upstream one.
+		mcm_tmdb_configure($fixture, array(
+			'MCM_TMDB_BASE_URL'      => 'http://127.0.0.1:' . $bundle['stub']['port'] . '/tmdb_stub.php',
+			'MCM_TMDB_CACHE_DIR'     => $fixture['root'] . '/cache',
+			'TMDB_READ_ACCESS_TOKEN' => null,
+		));
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=550');
+		$body     = mcm_json_body($response);
+		t_same(503, $response['status'], 'a site with no token answers that it is not configured');
+		t_same('configuration', isset($body['error']) ? $body['error'] : '', 'the failure names the configuration category');
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'and nothing was sent to find that out');
+
+		mcm_tmdb_configure($fixture, array(
+			'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $bundle['stub']['port'] . '/tmdb_stub.php',
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+
+		// Last in the group on purpose: the stub goes on sleeping after the
+		// client has given up, so anything asked of it after this would be
+		// answered late through no fault of the proxy's.
+		$response = mcm_http($bundle['app'], '/tmdb.php?operation=movie&movie_id=599');
+		$body     = mcm_json_body($response);
+		t_same(504, $response['status'], 'an endpoint that takes too long is answered as a timeout');
+		t_same('timeout', isset($body['error']) ? $body['error'] : '', 'the timeout names its own category');
+		t_lacks('127.0.0.1', $response['body'], 'the timeout names no URL');
+	} catch (Exception $error) {
+		mcm_tmdb_proxy_stop($bundle);
+		throw $error;
+	}
+	mcm_tmdb_proxy_stop($bundle);
+});
+
+t_group('tmdb proxy source checks of last resort', function () {
+	$proxy = MCM_REPO_ROOT . '/inc/tmdb_proxy.php';
+	$entry = MCM_REPO_ROOT . '/tmdb.php';
+
+	t_ok(is_readable($proxy), 'the proxy policy lives in inc/tmdb_proxy.php');
+	t_ok(is_readable($entry), 'the entry point lives in tmdb.php');
+
+	// One outbound call, in one place, after everything that decides what it may
+	// be. A second one somewhere else in the file would be a path this file's
+	// allowlist never saw.
+	t_same(1, mcm_count_calls($proxy, 'mcm_tmdb_get'), 'the proxy asks TMDb from exactly one place');
+	t_same(0, mcm_count_calls($entry, 'mcm_tmdb_get'), 'the entry point asks TMDb from nowhere');
+	t_same(0, mcm_count_calls($proxy, 'curl_init'), 'the proxy opens no handle of its own');
+	t_same(0, mcm_count_new($proxy, 'TMDb'), 'the proxy does not build the old vendored wrapper');
+	t_same(0, mcm_count_debug_output($proxy), 'the proxy dumps nothing into the response');
+	t_same(0, mcm_count_debug_output($entry), 'the entry point dumps nothing into the response');
+
+	// The five operations, named in the file that declares them. The list is
+	// written out here rather than read from the source, so adding a sixth has
+	// to be a decision somebody made twice.
+	$body = mcm_method_tokens($proxy, 'mcm_tmdb_operations');
+	t_ok(count($body) > 0, 'mcm_tmdb_operations() is declared');
+	$declared = array();
+	foreach ($body as $token) {
+		if ($token['id'] === T_CONSTANT_ENCAPSED_STRING) {
+			$literal = substr($token['text'], 1, -1);
+			if (in_array($literal, array('configuration', 'search', 'movie', 'videos', 'list'), true)) {
+				$declared[$literal] = true;
+			}
+		}
+	}
+	$declared = array_keys($declared);
+	sort($declared);
+	t_same(array('configuration', 'list', 'movie', 'search', 'videos'), $declared, 'the allowlist declares the five operations');
+
+	// The one place a caller's request becomes a path is the plan, and the plan
+	// reads validated values rather than the request.
+	$plan = mcm_method_tokens($proxy, 'mcm_tmdb_plan');
+	t_ok(count($plan) > 0, 'mcm_tmdb_plan() is declared');
+	t_same(0, mcm_count_calls_in($plan, 'mcm_tmdb_get'), 'planning a request does not make one');
+
+	// The entry point is the door and nothing else: it reads the request, hands
+	// it over, and holds no policy of its own.
+	$source = mcm_flat_source($entry);
+	t_lacks('curl', $source, 'the entry point speaks no HTTP of its own');
+	t_lacks('TMDB_READ_ACCESS_TOKEN', $source, 'the entry point names no credential');
+	t_same(1, mcm_count_calls($entry, 'mcm_tmdb_serve'), 'the entry point serves the request in one call');
+});

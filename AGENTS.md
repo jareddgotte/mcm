@@ -176,8 +176,9 @@ the application. Setup is documented in `README.md`.
   primitives of their own. `mcm_guarded_entry_points()` in
   `tests/entrypoints.php` is the written-down list of who loads them, and a page
   that starts loading them without being added there fails the suite;
-  `mcm_unguarded_guard_users()` beside it names the pages that load them and
-  guard nothing, which is `index.php` and its need for `mcm_csrf_token()`.
+  `mcm_unguarded_guard_users()` beside it names the files that load them and
+  guard nothing - `index.php` and its need for `mcm_csrf_token()`, and the
+  read-only TMDb proxy and its need for the refusal bodies.
 - Every mutation endpoint - `create_list.php`, `rename_list.php`,
   `delete_list.php`, `adjust_lists.php`, `share_lists.php`, `add_movie.php`,
   `delete_movie.php`, `move.php`, `import_list.php` - asks all four, and the
@@ -250,10 +251,38 @@ the application. Setup is documented in `README.md`.
   case that makes it sleep past the timeout runs last in
   `tests/pages/tmdb_client.php`. Move it earlier and whatever follows it is
   answered late and fails as a timeout for a harness reason.
+- `tmdb.php` is the proxy entry point and `inc/tmdb_proxy.php` is the whole of
+  its policy: the five operations it exposes, what each accepts, the path and
+  query each becomes, and the fields each answers with. A request names an
+  operation, never a URL; a field the named operation does not accept is
+  refused rather than ignored, which is what leaves no way to hand it a host, a
+  method, an extra query field or a transport option. Refusals are the shared
+  bounded bodies from `inc/guards.php`, and they happen before anything goes
+  out. An answer is rebuilt field by field rather than forwarded, so an upstream
+  field nobody named reaches nobody; `mcm_key_paths()` in `tests/cases.php` is
+  what asserts that, by naming every key a response actually holds.
+- The proxy calls none of the four guards, and both it and `tmdb.php` are named
+  in `mcm_unguarded_guard_users()` for it. Every operation is read-only, so
+  there is no write for a CSRF token to protect, and the public sharing page -
+  which has no token - is one of the pages that will use it.
+- Only the configuration answer is cached, for a day, in a directory the
+  application creates 0700 and writes through a temporary file and a rename, so
+  a reader never sees half an answer and two writers cannot corrupt one. It
+  holds the projection rather than the upstream body. The cache is advisory
+  throughout: every failure means "ask again", never "fail the request". The
+  suite counts what actually went out by reading the stub's own request log
+  (`mcm_tmdb_stub_requests()`), which is the only way to tell a cache hit from a
+  miss and to prove a refusal cost no outbound call.
+- The proxy cases need two built-in servers from one fixture - the application
+  on one, the stub on the other - because the built-in server answers one
+  request at a time and a proxy request reaching a stub on its own server would
+  wait for itself. The timeout case stays last for the reason the client's does.
 - The old vendored wrapper in `inc/classes/TMDb.inc` is still what
   `dialog.php`, `import_list.php` and the two views call, and it still holds
   `TMDB_API_KEY`; it is built per request now rather than kept in `$_SESSION`.
-  Both it and the dead auth-session path are removed by a later issue.
+  Nothing in the site calls the proxy yet: search, the trailer modal and list
+  import are moved onto it by later issues, and the wrapper and the dead
+  auth-session path are removed after that.
 
 ## Database access
 
