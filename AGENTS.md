@@ -67,7 +67,10 @@ the application. Setup is documented in `README.md`.
   listed in `mcm_db_uncovered()`: a call present in a method but never reached, a
   value written to a column too narrow for it, and a `WHERE` clause that stops
   restricting. All three were injected, shown failing and reverted; if you weaken
-  the group, do that again rather than assume.
+  the group, do that again rather than assume. The third is also why the list
+  endpoints are driven there against real rows, as owner, non-owner and nobody:
+  a refusal that has already written is still a refusal from the outside, so
+  every case asserts the rows afterwards and not only the response.
 - Server lifecycle is the sharp edge, because its failure mode is a hang rather
   than a failure. `proc_close()` waits for the child, so calling it on a server
   that ignored SIGTERM never returns; `mcm_db_stop_server()` therefore signals,
@@ -138,17 +141,31 @@ the application. Setup is documented in `README.md`.
   live. Login and Registration call it rather than PHP's functions directly, so
   a change to any of that has one place to happen in.
 - `inc/guards.php` holds the reusable request guards - signed-in checks, current
-  user, POST-only, CSRF, movie-list ownership and the fixed JSON refusal bodies.
-  Its CSRF token comes from `mcm_random_token()` and is checked with
+  user, POST-only, CSRF, movie-list ownership, the request values an identifier
+  or a list position is allowed to be, and the fixed JSON refusal bodies. Its
+  CSRF token comes from `mcm_random_token()` and is checked with
   `mcm_hash_equals()`, both from `inc/security.php`; the guards declare no
-  primitives of their own. It is declarations only, and nothing loads it yet: an
-  endpoint adopts it deliberately. `php tests/run.php` asserts that no source outside `tests/`
-  includes it, so the first endpoint to adopt a guard also updates that
-  assertion in `tests/cases.php`.
+  primitives of their own. Adoption is deliberate and endpoint by endpoint:
+  `mcm_guarded_entry_points()` in `tests/entrypoints.php` is the written-down
+  list of who has adopted them, and a page that starts loading them without
+  being added there fails the suite.
+- The list mutation endpoints - `create_list.php`, `rename_list.php`,
+  `delete_list.php`, `adjust_lists.php`, `share_lists.php` - are the ones that
+  have adopted them. Each takes the owner from the session and never from the
+  request, and each write names that owner in its own `WHERE` clause as well:
+  the guard refuses the request, and the clause is what leaves the statement
+  unable to reach somebody else's row if a guard were ever dropped. A request
+  naming several lists checks all of them before writing any, so a range that
+  reaches one list belonging to somebody else moves none of them. POST-only and
+  CSRF are the guards these have *not* adopted yet; that is its own issue.
 - A refusal answers with a status from `mcm_json_error_catalogue()` and that
   status's fixed body, so two different reasons sharing a status cannot be told
   apart from outside; the reason goes to the log through `mcm_log()`. Tokens are
-  never logged.
+  never logged. A value the page itself computed - a list identifier, a
+  position, a JSON array of them - is refused this way when it is malformed. A
+  value a person typed is not: `mcm_list_name_error()` still answers a bad list
+  name with its own bounded reason, because that one is feedback for whoever
+  typed it.
 
 ## Database access
 

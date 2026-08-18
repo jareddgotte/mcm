@@ -47,6 +47,17 @@ define('MCM_CSRF_FIELD', 'csrf_token');
 /** The $_SERVER key for the X-CSRF-Token request header, which AJAX callers may use instead of the field. */
 define('MCM_CSRF_HEADER', 'HTTP_X_CSRF_TOKEN');
 
+/**
+ * The largest position a list can be moved to.
+ *
+ * movie_lists.list_rank is a tinyint unsigned, so 255 is what the column holds
+ * (see .your_database.sql). What a server does with a rank past it depends on
+ * the server - a strict one refuses the write, an older one clamps the value
+ * silently - so it is refused here instead, where the answer is the same
+ * everywhere.
+ */
+define('MCM_MAX_LIST_RANK', 255);
+
 /*
  * ---------------------------------------------------------------------------
  * Values
@@ -74,6 +85,57 @@ function mcm_positive_int($value)
 	}
 
 	return null;
+}
+
+/**
+ * A list position, or null when the value is not one.
+ *
+ * A rank is not an identifier: the first list a user creates is rank 0, so this
+ * is the one request value where zero is a real answer and mcm_positive_int()
+ * is the wrong question. The upper bound is the column's, so a rank that would
+ * be clamped on the way into the database is refused here instead.
+ *
+ * @param mixed $value
+ * @return int|null
+ */
+function mcm_list_rank($value)
+{
+	if (is_int($value)) {
+		$number = $value;
+	} elseif (is_string($value) && preg_match('/^[0-9]+$/', $value) === 1) {
+		$number = (int) $value;
+	} else {
+		return null;
+	}
+
+	return ($number >= 0 && $number <= MCM_MAX_LIST_RANK) ? $number : null;
+}
+
+/**
+ * Whether a decoded value is a positional array: the keys 0..n-1, in order.
+ *
+ * The pages that post several lists at once post them as a JSON array and then
+ * index into it by position, so "is this an array" is not the question - a JSON
+ * object decodes to an array too, and its keys are whatever the sender chose.
+ *
+ * The empty array is one of these on purpose: the share dialog posts "[]" when
+ * a save changed nothing, and that request has always been a no-op rather than
+ * an error. (range(0, -1) counts downwards and returns array(0, -1), so the
+ * empty case cannot be left to the general comparison below.)
+ *
+ * @param mixed $value
+ * @return bool
+ */
+function mcm_is_positional_array($value)
+{
+	if (!is_array($value)) {
+		return false;
+	}
+	if (count($value) === 0) {
+		return true;
+	}
+
+	return array_keys($value) === range(0, count($value) - 1);
 }
 
 /**

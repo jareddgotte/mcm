@@ -641,3 +641,88 @@ function mcm_check_entry_point($file, $root)
 	}
 	return $problems;
 }
+
+/**
+ * The entry points that have adopted the shared guards, project-relative and
+ * sorted.
+ *
+ * Adoption is deliberate and endpoint by endpoint, so this is a written-down
+ * list rather than something derived from the source: derived from the source
+ * it would agree with whatever the source happens to do, which is the one thing
+ * an adoption check must not do.
+ *
+ * @return array
+ */
+function mcm_guarded_entry_points()
+{
+	return array(
+		'adjust_lists.php',
+		'create_list.php',
+		'delete_list.php',
+		'rename_list.php',
+		'share_lists.php',
+	);
+}
+
+/**
+ * The statements in a file that write to the database, as flat token strings.
+ *
+ * "Writes" means the three verbs that change a row. Reading the statement's own
+ * tokens is what makes this usable as evidence: a file that mentions a WHERE
+ * clause in a comment, or qualifies a different query by owner elsewhere, must
+ * not be able to satisfy an assertion about this one. Comments are already gone
+ * by the time the tokenizer is done with them.
+ *
+ * @param string $file
+ * @return array one flat string per writing statement
+ */
+function mcm_write_statements($file)
+{
+	$found = array();
+
+	foreach (mcm_tokens($file) as $token) {
+		if ($token['id'] !== T_CONSTANT_ENCAPSED_STRING) {
+			continue;
+		}
+		$sql = trim($token['text'], "'\"");
+		if (preg_match('/^\s*(UPDATE|DELETE|INSERT)\s/i', $sql) === 1) {
+			$found[] = preg_replace('/\s+/', ' ', $sql);
+		}
+	}
+	return $found;
+}
+
+/**
+ * Whether a write statement from mcm_write_statements() actually restricts by
+ * owner, rather than merely mentioning "user_id" somewhere in the string.
+ *
+ * A bare substring check (does "user_id" appear anywhere in the SQL text)
+ * passes for an UPDATE that only sets user_id, or that names it in a comment-
+ * like alias, and passes for a DELETE with no WHERE clause at all as long as
+ * user_id shows up in the table or column list elsewhere. This instead parses
+ * the statement's own shape: for an INSERT, user_id must be one of the columns
+ * being written; for an UPDATE or DELETE, user_id must appear in the WHERE
+ * clause bound to :user_id by equality, which is what a database driver would
+ * actually use to restrict the rows touched.
+ *
+ * @param string $sql one flattened statement from mcm_write_statements()
+ * @return bool
+ */
+function mcm_statement_owner_qualified($sql)
+{
+	$sql = trim($sql);
+
+	if (preg_match('/^INSERT\s+INTO\s+\S+\s*\(([^)]*)\)/i', $sql, $matches) === 1) {
+		$columns = array_map('trim', explode(',', $matches[1]));
+		return in_array('user_id', $columns, true);
+	}
+
+	if (preg_match('/^(UPDATE|DELETE)\b/i', $sql) === 1) {
+		if (preg_match('/\bWHERE\b(.*)$/is', $sql, $matches) !== 1) {
+			return false;
+		}
+		return preg_match('/\buser_id\s*=\s*:user_id\b/i', $matches[1]) === 1;
+	}
+
+	return false;
+}

@@ -15,12 +15,17 @@
  * whenever a visitor's authentication state changes.
  *
  * Four cover inc/guards.php: what each guard allows, what it refuses, what a
- * refusal is allowed to say, and the fact that nothing calls any of it yet.
+ * refusal is allowed to say, and which endpoints have adopted it.
+ *
+ * One covers the endpoints that write a movie list: that an anonymous request
+ * is refused before a connection is opened, and that a request which is not the
+ * shape the page sends gets a bounded refusal rather than reaching a query.
  *
  * One group is optional and is the only one that needs anything beyond a PHP
  * CLI: given a database server binary it runs a private, throw-away server and
- * drives the authentication paths against the tracked schema. Without one it
- * skips loudly and says what that leaves uncovered.
+ * drives the authentication paths - and the three actors a list mutation has to
+ * tell apart - against the tracked schema. Without one it skips loudly and says
+ * what that leaves uncovered.
  *
  * The last two cover what the bootstrap's escaping helpers do with a hostile
  * string, and the bounded validation a submitted list name has to pass.
@@ -753,6 +758,12 @@ t_group('database failure', function () {
 		'DB_PASS' => $password,
 	)));
 
+	// The real entry point below is a list endpoint, and a list endpoint refuses
+	// a request with nobody behind it before it ever opens a connection. Being
+	// signed in is what lets this group reach the outage it is about.
+	$signed_in = 'd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0';
+	mcm_seed_session($fixture, $signed_in, array('user_name' => 'outage-user', 'user_id' => 4, 'user_logged_in' => 1));
+
 	$server = mcm_server_start($fixture);
 	try {
 		// 1. A page that cannot be served without the database.
@@ -807,7 +818,7 @@ t_group('database failure', function () {
 
 		// 4. A real entry point, end to end. rename_list.php is the smallest of
 		// them: two parameters, one connection, one query.
-		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything');
+		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything', array('Cookie: PHPSESSID=' . $signed_in));
 
 		t_same(500, $response['status'], 'a real page during an outage: the response says the request failed');
 		t_same(mcm_generic_message(), $response['body'], 'a real page during an outage: the client gets the generic message and nothing else');
@@ -850,10 +861,19 @@ t_group('database failure', function () {
 			}
 		}
 
-		// A page that never reaches the database is unaffected by the outage.
-		$response = mcm_http($server, '/rename_list.php');
+		// A page that never reaches the database is unaffected by the outage. The
+		// name is validated before the connection is opened, so a name the page
+		// refuses is answered the same during an outage as at any other time.
+		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=' . rawurlencode(str_repeat('a', 65)), array('Cookie: PHPSESSID=' . $signed_in));
 		t_same(200, $response['status'], 'a page that stops on its own input check is unaffected');
-		t_contains('No movie list id given', $response['body'], 'the input check still answers');
+		t_contains('List name is longer than 64 characters', $response['body'], 'the input check still answers');
+		t_same('', $response['log'], 'the input check answered without reaching the outage');
+
+		// And a request with nobody behind it stops earlier still: the guard
+		// refuses it, and no connection is attempted for it either.
+		$response = mcm_http($server, '/rename_list.php?movie_list_id=1&list_name=anything');
+		t_same(401, $response['status'], 'an anonymous request stops before the connection');
+		t_lacks('SQLSTATE', $response['log'], 'an anonymous request never reaches the outage');
 	} catch (Exception $exception) {
 		t_ok(false, 'the database failure cases ran', $exception->getMessage());
 	}
@@ -1715,7 +1735,7 @@ t_group('guard rejections', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 15. The guards are additive: constant-time, and nothing calls them yet
+ * 15. The guards are additive, and who has adopted them
  * ---------------------------------------------------------------------------
  */
 
@@ -1750,9 +1770,10 @@ t_group('guards are additive', function () {
 	t_same(1, mcm_count_calls_in($body, 'mcm_hash_equals'), 'the CSRF check compares through mcm_hash_equals()');
 	t_same(0, mcm_count_calls_in($body, 'hash_equals'), 'the CSRF check does not compare on its own');
 
-	// Nothing outside the test suite loads the guards yet. This issue adds them
-	// and leaves every request path exactly as it was; the issues that adopt
-	// them, endpoint by endpoint, are what change this assertion.
+	// Which entry points load the guards, named one by one. Adoption is
+	// deliberate and endpoint by endpoint, so this list grows only when an issue
+	// adopts them somewhere; a page that starts loading them without being added
+	// here fails the suite rather than passing quietly.
 	$callers = array();
 	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
 		if ($file === $guards) {
@@ -1766,7 +1787,8 @@ t_group('guards are additive', function () {
 			}
 		}
 	}
-	t_same(array(), $callers, 'no entry point loads the guards yet, so no request path changed');
+	sort($callers);
+	t_same(mcm_guarded_entry_points(), $callers, 'the guards are loaded by exactly the endpoints that have adopted them');
 
 	// The guards are a file of declarations: loading them has to be silent, and
 	// on its own must not produce a page.
@@ -1785,7 +1807,205 @@ t_group('guards are additive', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 16. The optional real-server database group
+ * 16. The list endpoints: who may write, and what a malformed request gets
+ * ---------------------------------------------------------------------------
+ *
+ * Everything a list endpoint refuses, it refuses before it opens a connection,
+ * which is what makes this group possible without a database: the fixture is
+ * pointed at a port nothing listens on, so "did this request reach the
+ * database" is a question the log answers. A refusal that logs no driver error
+ * is a request that could not have changed a row.
+ *
+ * The owner and non-owner halves of the same question need real rows, and live
+ * in the optional real-database group below.
+ */
+
+t_group('list endpoint guards', function () {
+	// The endpoints that write a list, and a request each that would work if
+	// the caller were allowed to make it.
+	$mutations = array(
+		'create_list.php' => array('list_name' => 'a new list', 'list_rank' => 0),
+		'rename_list.php' => array('movie_list_id' => 1, 'list_name' => 'a new name'),
+		'delete_list.php' => array('movie_list_id' => 1),
+		'adjust_lists.php' => array('stop_state' => '[2,1]', 'start_pos' => 0, 'stop_pos' => 1),
+		'share_lists.php' => array('changed_lists' => '[1]', 'share_vals' => '[1]'),
+	);
+
+	/* What the source says ------------------------------------------------- */
+
+	// mcm_statement_owner_qualified() has to actually parse the statement's
+	// shape rather than grep for the substring "user_id" - prove that against
+	// deliberately broken statement strings before trusting it against the real
+	// endpoints below. Each of these is built here, not read from the checkout.
+	$broken_update_only_in_set = 'UPDATE movie_lists SET user_id = :user_id WHERE movie_list_id = :movie_list_id';
+	$broken_delete_no_where    = 'DELETE FROM movie_lists';
+	$broken_delete_wrong_where = 'DELETE FROM movie_lists WHERE movie_list_id = :movie_list_id';
+	$broken_insert_missing     = 'INSERT INTO movie_lists (list_name, list_rank) VALUES (:list_name, :list_rank)';
+	$correct_update            = 'UPDATE movie_lists SET list_name = :list_name WHERE movie_list_id = :movie_list_id AND user_id = :user_id';
+	$correct_delete            = 'DELETE FROM movie_lists WHERE movie_list_id = :movie_list_id AND user_id = :user_id';
+	$correct_insert            = 'INSERT INTO movie_lists (user_id, list_name, list_rank) VALUES (:user_id, :list_name, :list_rank)';
+
+	t_same(false, mcm_statement_owner_qualified($broken_update_only_in_set), 'owner check rejects user_id that only appears in SET, not WHERE');
+	t_same(false, mcm_statement_owner_qualified($broken_delete_no_where), 'owner check rejects a DELETE with no WHERE clause at all');
+	t_same(false, mcm_statement_owner_qualified($broken_delete_wrong_where), 'owner check rejects a WHERE that names only the list, not the owner');
+	t_same(false, mcm_statement_owner_qualified($broken_insert_missing), 'owner check rejects an INSERT that does not write user_id');
+	t_same(true, mcm_statement_owner_qualified($correct_update), 'owner check accepts an UPDATE whose WHERE restricts by user_id');
+	t_same(true, mcm_statement_owner_qualified($correct_delete), 'owner check accepts a DELETE whose WHERE restricts by user_id');
+	t_same(true, mcm_statement_owner_qualified($correct_insert), 'owner check accepts an INSERT that writes user_id');
+
+	foreach (array_keys($mutations) as $page) {
+		$path = MCM_REPO_ROOT . '/' . $page;
+
+		// The behavioral halves below (this group's HTTP section, and "real
+		// database: list ownership") already prove a signed-out or wrong-owner
+		// caller cannot write; this call count is a cheap regression anchor on
+		// top of that, not the only evidence for it.
+		t_same(1, mcm_count_calls($path, 'mcm_require_login'), $page . ' asks for a signed-in user exactly once');
+
+		// This is the one claim in this block that behavioral tests cannot make:
+		// the ownership guard in front of every one of these statements already
+		// refuses a foreign request before the statement ever runs, so no HTTP
+		// case can observe what the WHERE clause alone would have done. It is a
+		// deliberate second layer - the guard refuses the request, and this
+		// leaves the statement itself unable to reach another account's row even
+		// if the guard above it were ever dropped - so it is asserted here as
+		// its own claim.
+		foreach (mcm_write_statements($path) as $sql) {
+			if (stripos($sql, 'movie_lists') === false && stripos($sql, 'movies') === false) {
+				continue;
+			}
+			t_ok(mcm_statement_owner_qualified($sql), $page . ': a statement that changes a row is qualified by owner - ' . $sql);
+		}
+	}
+
+	// The four that are handed a list identifier check whose it is. create_list
+	// is the one that is not: it makes a list rather than changing one. Which
+	// actor may and may not write is proven behaviorally below and in "real
+	// database: list ownership"; this is the regression anchor for how that is
+	// wired.
+	foreach (array('rename_list.php', 'delete_list.php') as $page) {
+		t_same(1, mcm_count_calls(MCM_REPO_ROOT . '/' . $page, 'mcm_require_list_owner'), $page . ' checks the owner of the list it was given');
+	}
+	foreach (array('adjust_lists.php', 'share_lists.php') as $page) {
+		t_ok(mcm_count_calls(MCM_REPO_ROOT . '/' . $page, 'mcm_require_list_owner') > 0, $page . ' checks the owner of every list it was given');
+	}
+	t_same(0, mcm_count_calls(MCM_REPO_ROOT . '/create_list.php', 'mcm_require_list_owner'), 'create_list.php has no existing list to own');
+
+	// The new list's identity comes from the insert. The read-back this replaced
+	// looked it up by owner and rank, which is not a unique pair. The behavioral
+	// regression for this (a second list created at a rank another list already
+	// holds) lives in "real database: list ownership"; this is the anchor on the
+	// source shape that makes it true.
+	$create = MCM_REPO_ROOT . '/create_list.php';
+	t_contains('lastInsertId', mcm_flat_source($create), 'create_list.php takes the new identifier from the insert itself');
+	t_lacks('SELECT movie_list_id FROM movie_lists', mcm_flat_source($create), 'create_list.php no longer reads the new list back by rank');
+
+	/* What a request gets --------------------------------------------------- */
+
+	// Nothing is listening on port 1, so any request that reaches the database
+	// leaves a driver error in the log and any request that does not, does not.
+	$fixture = mcm_fixture('list-guards', array('config' => array('DB_HOST' => '127.0.0.1;port=1')));
+	$owner   = 'f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1';
+	mcm_seed_session($fixture, $owner, array('user_name' => 'list-owner', 'user_id' => 3, 'user_logged_in' => 1));
+
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$bad_request  = '{"error":"bad_request","message":"The request could not be processed."}';
+
+	$server = mcm_server_start($fixture);
+	try {
+		/* 1. Anonymous. Refused, and refused before the connection. */
+		foreach ($mutations as $page => $fields) {
+			$response = mcm_http_post($server, '/' . $page, $fields);
+
+			t_same(401, $response['status'], $page . ' refuses an anonymous request');
+			t_same($unauthorised, $response['body'], $page . ' answers an anonymous request with the fixed body');
+			t_lacks('greatsuccess', $response['body'], $page . ' does not tell an anonymous caller it worked');
+			t_lacks('movie_list_id:', $response['body'], $page . ' hands an anonymous caller no identifier');
+			t_contains('no signed-in user', $response['log'], $page . ': the reason an anonymous request was refused is logged');
+			// The whole of "without changing data", on a suite with no database:
+			// the request never opened a connection, so there was nothing to
+			// change. A connection attempt would be a driver error in the log.
+			t_lacks('SQLSTATE', $response['log'], $page . ' never reaches the database for an anonymous request');
+			t_contains('application/json', implode('', mcm_header_values($response, 'Content-Type')), $page . ': an anonymous refusal is JSON');
+		}
+
+		// A session that says it is signed out is not signed in, and neither is
+		// one that lost its name.
+		$broken = array(
+			'a signed-out session' => array('user_name' => 'someone', 'user_id' => 3, 'user_logged_in' => 0),
+			'a session with no user' => array('user_logged_in' => 1),
+		);
+		$index = 0;
+		foreach ($broken as $description => $data) {
+			$id = str_repeat(dechex(10 + $index++), 16);
+			mcm_seed_session($fixture, $id, $data);
+			$response = mcm_http_post($server, '/delete_list.php', array('movie_list_id' => 1), array('Cookie: PHPSESSID=' . $id));
+
+			t_same(401, $response['status'], 'delete_list.php refuses ' . $description);
+			t_lacks('SQLSTATE', $response['log'], 'delete_list.php never reaches the database for ' . $description);
+		}
+
+		/* 2. Signed in, but the request is not the shape the page sends. */
+		$cookie    = array('Cookie: PHPSESSID=' . $owner);
+		$malformed = array(
+			'a rank that is not a number' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'ok', 'list_rank' => 'abc'), 'logged' => 'not a position'),
+			'a rank past the width of the column' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'ok', 'list_rank' => 256), 'logged' => 'not a position'),
+			'no rank at all' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'ok'), 'logged' => 'not a position'),
+			'an order that is not JSON' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => 'not json', 'start_pos' => 0, 'stop_pos' => 1), 'logged' => 'not a non-empty positional array'),
+			'an order that is a JSON object' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => '{"1":"2"}', 'start_pos' => 0, 'stop_pos' => 0), 'logged' => 'not a non-empty positional array'),
+			'an order with nothing in it' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => '[]', 'start_pos' => 0, 'stop_pos' => 0), 'logged' => 'not a non-empty positional array'),
+			'an order with no start position' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => '[2,1]', 'stop_pos' => 1), 'logged' => 'start position that is not a position'),
+			'an order that ends before it starts' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => '[2,1]', 'start_pos' => 1, 'stop_pos' => 0), 'logged' => 'refused positions 1-0'),
+			'an order that runs past its own array' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => '[2,1]', 'start_pos' => 0, 'stop_pos' => 9), 'logged' => 'refused positions 0-9'),
+			'a share request that is not JSON' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => 'not json', 'share_vals' => '[1]'), 'logged' => 'changed list array that is not a positional array'),
+			'a share request whose arrays do not line up' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => '[1,2]', 'share_vals' => '[1]'), 'logged' => 'refused 2 lists against 1 share values'),
+			'a share value that is not a setting' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => '[1]', 'share_vals' => '[7]'), 'logged' => 'share value that is not 0 or 1'),
+		);
+		foreach ($malformed as $description => $case) {
+			$response = mcm_http_post($server, '/' . $case['page'], $case['fields'], $cookie);
+
+			t_same(400, $response['status'], $case['page'] . ' refuses ' . $description);
+			t_same($bad_request, $response['body'], $case['page'] . ' answers ' . $description . ' with the fixed body');
+			t_lacks('greatsuccess', $response['body'], $case['page'] . ' does not claim ' . $description . ' worked');
+			t_contains($case['logged'], $response['log'], $case['page'] . ': the reason is logged for ' . $description);
+			// Malformed input is refused where it is read, which is before the
+			// connection: nothing was part-written and then abandoned.
+			t_lacks('SQLSTATE', $response['log'], $case['page'] . ' never reaches the database for ' . $description);
+		}
+
+		// The refusal says nothing about what was sent. The value that caused it
+		// is in the log, where somebody diagnosing this can read it.
+		$response = mcm_http_post($server, '/create_list.php', array('list_name' => 'ok', 'list_rank' => $fixture['seed']), $cookie);
+		t_same($bad_request, $response['body'], 'a refused rank gets the same body as every other bad request');
+		t_lacks($fixture['seed'], $response['body'], 'the refused value never reaches the client');
+		t_lacks($fixture['seed'], mcm_header_text($response), 'the refused value never reaches the response headers');
+		t_contains($fixture['seed'], $response['log'], 'the refused value itself reaches the log');
+
+		/* 3. Signed in, and the request is the shape the page sends. It gets
+		 * past every check and stops at the database this fixture has none of,
+		 * which is the only thing that says the checks above let it through. */
+		$accepted = array(
+			'the first list a user creates, at rank 0' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'first', 'list_rank' => 0)),
+			'a list at the last rank the column holds' => array('page' => 'create_list.php', 'fields' => array('list_name' => 'last', 'list_rank' => 255)),
+			'a reorder of two lists' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => '[2,1]', 'start_pos' => 0, 'stop_pos' => 1)),
+			'a save that changed no sharing at all' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => '[]', 'share_vals' => '[]')),
+			'a share value sent as a string' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => '[1]', 'share_vals' => '["1"]')),
+		);
+		foreach ($accepted as $description => $case) {
+			$response = mcm_http_post($server, '/' . $case['page'], $case['fields'], $cookie);
+
+			t_lacks($bad_request, $response['body'], $case['page'] . ' does not refuse ' . $description);
+			t_contains('SQLSTATE', $response['log'], $case['page'] . ' got as far as the database for ' . $description);
+		}
+	} catch (Exception $exception) {
+		t_ok(false, 'the list endpoint guard cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 17. The optional real-server database group
  * ---------------------------------------------------------------------------
  *
  * Everything above needs a PHP CLI and nothing else, and still does. This group
@@ -2068,7 +2288,244 @@ t_group('real database', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 17. Escaping what the server renders
+ * 18. The three actors a list mutation has to tell apart
+ * ---------------------------------------------------------------------------
+ *
+ * The group above proves that an anonymous or malformed request never reaches a
+ * query. What it cannot prove without rows is the middle case: a request from
+ * somebody who is signed in, sending an identifier that exists, for a list that
+ * is not theirs. That is regression class 3 in mcm_db_uncovered() - a WHERE
+ * clause that stops restricting still parses and still runs - and it needs a
+ * real server, so it lives here and skips with the rest of this file.
+ *
+ * Every case asks the same two questions: what did the client get back, and
+ * what do the rows say afterwards. The second is the one that matters, because
+ * a refusal that has already written is still a refusal from the outside.
+ */
+
+t_group('real database: list ownership', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		// The group above has already printed the reason at length.
+		t_skip('the list ownership cases', mcm_db_skip_reason());
+		return;
+	}
+	if ($server['schema_error'] !== '') {
+		t_ok(false, 'the list ownership cases have the tracked schema', $server['schema_error']);
+		return;
+	}
+
+	$password = 'p' . bin2hex(random_bytes(6));
+	$fixture  = mcm_db_fixture('list-ownership', $server);
+	$pdo      = mcm_db_reset($server);
+
+	$owner_id = mcm_db_seed_user($pdo, 'listowner', $password);
+	$other_id = mcm_db_seed_user($pdo, 'otherowner', $password);
+
+	// Signed-in sessions, seeded rather than logged in: what is under test here
+	// is what the endpoints do with a session, not how one is issued.
+	$owner_session = '11112222333344445555666677778888';
+	$other_session = '88887777666655554444333322221111';
+	mcm_seed_session($fixture, $owner_session, array('user_name' => 'listowner', 'user_id' => $owner_id, 'user_logged_in' => 1));
+	mcm_seed_session($fixture, $other_session, array('user_name' => 'otherowner', 'user_id' => $other_id, 'user_logged_in' => 1));
+
+	$owner_cookie = array('Cookie: PHPSESSID=' . $owner_session);
+	$other_cookie = array('Cookie: PHPSESSID=' . $other_session);
+
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+
+	// Two lists for the owner and one for everybody else, each with a movie in
+	// it, so a deletion has something of its own to take with it.
+	// The other account gets two lists as well, so that a request mixing one of
+	// theirs with one of somebody else's has something to move: a reorder that
+	// puts a list back where it already was would prove nothing about whether
+	// the write happened.
+	$first        = mcm_db_seed_list($pdo, $owner_id, 'first list', 0);
+	$second       = mcm_db_seed_list($pdo, $owner_id, 'second list', 1);
+	$theirs       = mcm_db_seed_list($pdo, $other_id, 'their list', 0);
+	$theirs_later = mcm_db_seed_list($pdo, $other_id, 'their second list', 1);
+	mcm_db_seed_movie($pdo, $first, 550);
+	mcm_db_seed_movie($pdo, $second, 551);
+	mcm_db_seed_movie($pdo, $theirs, 552);
+	mcm_db_seed_movie($pdo, $theirs_later, 553);
+
+	$owner_state = mcm_db_list_state($pdo, $owner_id);
+	$other_state = mcm_db_list_state($pdo, $other_id);
+
+	$server_handle = mcm_server_start($fixture);
+	try {
+		/* 1. Anonymous: refused, and the rows are exactly as they were --------- */
+
+		$anonymous = array(
+			'create_list.php' => array('list_name' => 'a list nobody asked for', 'list_rank' => 2),
+			'rename_list.php' => array('movie_list_id' => $first, 'list_name' => 'renamed by nobody'),
+			'delete_list.php' => array('movie_list_id' => $first),
+			'adjust_lists.php' => array('stop_state' => json_encode(array($second, $first)), 'start_pos' => 0, 'stop_pos' => 1),
+			'share_lists.php' => array('changed_lists' => json_encode(array($first)), 'share_vals' => '[1]'),
+		);
+		foreach ($anonymous as $page => $fields) {
+			$response = mcm_http_post($server_handle, '/' . $page, $fields);
+
+			t_same(401, $response['status'], $page . ' refuses an anonymous request');
+			t_same($unauthorised, $response['body'], $page . ' answers an anonymous request with the fixed body');
+			t_same($owner_state, mcm_db_list_state($pdo, $owner_id), $page . ": an anonymous request left the owner's lists alone");
+			t_same($other_state, mcm_db_list_state($pdo, $other_id), $page . ": an anonymous request left everybody else's lists alone");
+		}
+		t_same(1, mcm_db_movie_count($pdo, $first), 'an anonymous request deleted no movies');
+
+		/* 2. Signed in, and not the owner ------------------------------------- */
+
+		$trespass = array(
+			'renaming it' => array('page' => 'rename_list.php', 'fields' => array('movie_list_id' => $first, 'list_name' => 'mine now')),
+			'deleting it' => array('page' => 'delete_list.php', 'fields' => array('movie_list_id' => $first)),
+			'reordering it' => array('page' => 'adjust_lists.php', 'fields' => array('stop_state' => json_encode(array($second, $first)), 'start_pos' => 0, 'stop_pos' => 1)),
+			'sharing it' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => json_encode(array($first)), 'share_vals' => '[1]')),
+			'un-sharing it' => array('page' => 'share_lists.php', 'fields' => array('changed_lists' => json_encode(array($first)), 'share_vals' => '[0]')),
+		);
+		foreach ($trespass as $description => $case) {
+			$response = mcm_http_post($server_handle, '/' . $case['page'], $case['fields'], $other_cookie);
+
+			t_same(403, $response['status'], 'a signed-in stranger is refused ' . $description);
+			t_same($forbidden, $response['body'], 'a signed-in stranger gets the fixed body for ' . $description);
+			t_lacks('greatsuccess', $response['body'], 'a signed-in stranger is not told ' . $description . ' worked');
+			// The refusal never says whether the list exists, so the log is where
+			// the reason is.
+			t_contains('not owned by user ' . $other_id, $response['log'], 'the reason is logged for ' . $description);
+			t_same($owner_state, mcm_db_list_state($pdo, $owner_id), "the owner's lists are untouched by " . $description);
+		}
+		t_same(1, mcm_db_movie_count($pdo, $first), 'a signed-in stranger deleted no movies');
+
+		// A list that does not exist and a list belonging to somebody else are
+		// the same answer, so a stranger cannot map out which ids are real.
+		$response = mcm_http_post($server_handle, '/rename_list.php', array('movie_list_id' => 99999, 'list_name' => 'x'), $other_cookie);
+		t_same(403, $response['status'], 'a list that does not exist is refused too');
+		t_same($forbidden, $response['body'], 'a list that does not exist answers exactly as somebody else\'s does');
+
+		// A reorder is all or nothing: one list in the range belonging to
+		// somebody else and none of them moves, rather than half a reorder. The
+		// caller's own list is first in the request and is being moved from rank
+		// 1 to rank 0, so a write that happened before the refusal would show.
+		$mixed = json_encode(array($theirs_later, $first));
+		$response = mcm_http_post($server_handle, '/adjust_lists.php', array('stop_state' => $mixed, 'start_pos' => 0, 'stop_pos' => 1), $other_cookie);
+		t_same(403, $response['status'], 'a reorder that reaches somebody else\'s list is refused');
+		t_same($owner_state, mcm_db_list_state($pdo, $owner_id), 'a refused reorder moved none of the owner\'s lists');
+		t_same($other_state, mcm_db_list_state($pdo, $other_id), 'a refused reorder moved none of the caller\'s own lists either');
+
+		// The same, for sharing: the caller's own list is first in the request
+		// and is not shared afterwards, because the other one in the request is
+		// not theirs.
+		$response = mcm_http_post($server_handle, '/share_lists.php', array(
+			'changed_lists' => json_encode(array($theirs, $first)),
+			'share_vals'    => '[1,1]',
+		), $other_cookie);
+		t_same(403, $response['status'], 'a share that reaches somebody else\'s list is refused');
+		t_same($other_state, mcm_db_list_state($pdo, $other_id), 'a refused share left the caller\'s own list unshared');
+		t_same($owner_state, mcm_db_list_state($pdo, $owner_id), 'a refused share left the owner\'s list unshared');
+
+		/* 3. The owner, doing all of it --------------------------------------- */
+
+		// Creating. The identifier that comes back is the row that was inserted,
+		// and the rank it was given already belongs to another of this user's
+		// lists: the read-back this replaced looked a new list up by owner and
+		// rank, so it would have answered with the first list's id and the page
+		// would have attached every later change to that list instead.
+		$response = mcm_http_post($server_handle, '/create_list.php', array(
+			'list_name'        => 'a third list',
+			'list_description' => '',
+			'list_rank'        => 0,
+		), $owner_cookie);
+		$created = 0;
+		if (t_matches('/^movie_list_id:[0-9]+$/', $response['body'], 'the owner creates a list and is told its identifier')) {
+			$created = (int) substr($response['body'], 14);
+		}
+		$row = mcm_db_list_row($pdo, $created);
+
+		t_ok($created > $second, 'the identifier is the row that was just inserted, not an older one with the same rank');
+		t_same('a third list', isset($row['list_name']) ? $row['list_name'] : '', 'the new list holds the name that was sent');
+		t_same((string) $owner_id, isset($row['user_id']) ? (string) $row['user_id'] : '', 'the new list belongs to the session that created it');
+		t_same('', $response['log'], 'creating a list logs nothing');
+
+		// The owner is the session's, never the request's: a submitted user_id
+		// changes nothing about whose list this is.
+		$response = mcm_http_post($server_handle, '/create_list.php', array(
+			'list_name' => 'not theirs',
+			'list_rank' => 3,
+			'user_id'   => $other_id,
+		), $owner_cookie);
+		$claimed = (int) substr($response['body'], 14);
+		t_same((string) $owner_id, (string) mcm_db_list_row($pdo, $claimed)['user_id'], 'a submitted owner is ignored: the list belongs to the session');
+
+		// Renaming. The bytes that were submitted are the bytes that are stored;
+		// escaping is what makes a name with markup in it safe to render.
+		$markup = '<b>Amelie\'s</b> "list"';
+		$response = mcm_http_post($server_handle, '/rename_list.php', array('movie_list_id' => $first, 'list_name' => $markup), $owner_cookie);
+
+		t_same('greatsuccess', $response['body'], 'the owner renames their own list');
+		t_same($markup, mcm_db_list_row($pdo, $first)['list_name'], 'the stored name is exactly what was submitted');
+		t_same('their list', mcm_db_list_row($pdo, $theirs)['list_name'], 'renaming one list renames no other');
+
+		// Sharing, both ways.
+		$response = mcm_http_post($server_handle, '/share_lists.php', array(
+			'changed_lists' => json_encode(array($first, $second)),
+			'share_vals'    => '[1,1]',
+		), $owner_cookie);
+		t_same('greatsuccess', $response['body'], 'the owner shares their own lists');
+		t_same('1', (string) mcm_db_list_row($pdo, $first)['share'], 'the first list is shared afterwards');
+		t_same('1', (string) mcm_db_list_row($pdo, $second)['share'], 'the second list is shared afterwards');
+		t_same('0', (string) mcm_db_list_row($pdo, $theirs)['share'], 'nobody else\'s list was shared along with them');
+
+		$response = mcm_http_post($server_handle, '/share_lists.php', array(
+			'changed_lists' => json_encode(array($first)),
+			'share_vals'    => '[0]',
+		), $owner_cookie);
+		t_same('greatsuccess', $response['body'], 'the owner un-shares a list again');
+		t_same('0', (string) mcm_db_list_row($pdo, $first)['share'], 'the list is not shared afterwards');
+		t_same('1', (string) mcm_db_list_row($pdo, $second)['share'], 'the list that was not named keeps its setting');
+
+		// Reordering. The order that comes back is the order that was sent.
+		$order    = array($second, $first, $created, $claimed);
+		$response = mcm_http_post($server_handle, '/adjust_lists.php', array(
+			'stop_state' => json_encode($order),
+			'start_pos'  => 0,
+			'stop_pos'   => 3,
+		), $owner_cookie);
+
+		t_same('greatsuccess', $response['body'], 'the owner reorders their own lists');
+		foreach ($order as $rank => $list_id) {
+			t_same((string) $rank, (string) mcm_db_list_row($pdo, $list_id)['list_rank'], 'list at position ' . $rank . ' has that rank');
+		}
+		t_same('0', (string) mcm_db_list_row($pdo, $theirs)['list_rank'], 'reordering one account\'s lists does not renumber another\'s');
+
+		// Deleting: the list, and the movies that were in it, and nothing else.
+		$response = mcm_http_post($server_handle, '/delete_list.php', array('movie_list_id' => $first), $owner_cookie);
+
+		t_same('greatsuccess', $response['body'], 'the owner deletes their own list');
+		t_same(array(), mcm_db_list_row($pdo, $first), 'the list is gone');
+		t_same(0, mcm_db_movie_count($pdo, $first), 'the movies that were in it are gone with it');
+		t_same(1, mcm_db_movie_count($pdo, $second), 'the movies in the list that stayed are still there');
+		t_same(1, mcm_db_movie_count($pdo, $theirs), 'nobody else\'s movies were deleted');
+		t_same(1, mcm_db_movie_count($pdo, $theirs_later), 'nor the movies in their other list');
+		t_ok(mcm_db_list_row($pdo, $theirs) !== array(), 'nobody else\'s list was deleted');
+		t_same('', $response['log'], 'deleting a list logs nothing');
+
+		// The remaining lists are re-ranked from 0, and only this account's.
+		$ranks = array();
+		foreach (mcm_db_list_state($pdo, $owner_id) as $line) {
+			$parts   = explode(':', $line);
+			$ranks[] = end($parts) === '' ? '' : $parts[2];
+		}
+		t_same(array('0', '1', '2'), $ranks, 'the lists that are left are ranked from zero with no gap');
+		t_same('0', (string) mcm_db_list_row($pdo, $theirs)['list_rank'], 'the re-rank did not reach another account');
+	} catch (Exception $exception) {
+		t_ok(false, 'the list ownership cases ran', $exception->getMessage());
+	}
+	mcm_server_stop($server_handle);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 19. Escaping what the server renders
  * ---------------------------------------------------------------------------
  */
 
@@ -2240,7 +2697,7 @@ t_group('output escaping', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 18. Bounded validation of a submitted list name
+ * 20. Bounded validation of a submitted list name
  * ---------------------------------------------------------------------------
  */
 
@@ -2269,13 +2726,18 @@ t_group('list name validation', function () {
 	}
 
 	// The two pages that write a list name run that validation before they touch
-	// the database, so the refusal is observable without one.
+	// the database, so the refusal is observable without one. Both refuse an
+	// anonymous request before that, so these run as a signed-in user.
+	$signed_in = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+	mcm_seed_session($fixture, $signed_in, array('user_name' => 'name-user', 'user_id' => 5, 'user_logged_in' => 1));
+
 	$server = mcm_server_start($fixture);
 	try {
-		$long = str_repeat('a', 65);
+		$long   = str_repeat('a', 65);
+		$cookie = array('Cookie: PHPSESSID=' . $signed_in);
 		foreach (array('create_list.php?list_rank=0&list_name=', 'rename_list.php?movie_list_id=1&list_name=') as $path) {
 			$page     = substr($path, 0, strpos($path, '?'));
-			$response = mcm_http($server, '/' . $path . rawurlencode($long));
+			$response = mcm_http($server, '/' . $path . rawurlencode($long), $cookie);
 
 			t_same(200, $response['status'], $page . ' answers a name that is too long');
 			t_same('Error: List name is longer than 64 characters.', $response['body'], $page . ' refuses a name that is too long');
@@ -2283,7 +2745,7 @@ t_group('list name validation', function () {
 
 			// A name full of markup is not what validation is for: it goes
 			// through, and gets as far as the database this fixture has none of.
-			$response = mcm_http($server, '/' . $path . rawurlencode('<script>alert(1)</script>'));
+			$response = mcm_http($server, '/' . $path . rawurlencode('<script>alert(1)</script>'), $cookie);
 			t_lacks('Error: List name', $response['body'], $page . ' stores a name containing markup rather than refusing it');
 			t_contains('mcm', $response['log'], $page . ' got past validation and on to the database');
 		}
@@ -2312,7 +2774,7 @@ t_group('list name validation', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 19. The baseline headers every response carries
+ * 21. The baseline headers every response carries
  * ---------------------------------------------------------------------------
  */
 
@@ -2491,7 +2953,7 @@ t_group('security headers', function () {
 
 /*
  * ---------------------------------------------------------------------------
- * 20. The attributes on a cookie that is not the session cookie
+ * 22. The attributes on a cookie that is not the session cookie
  * ---------------------------------------------------------------------------
  */
 

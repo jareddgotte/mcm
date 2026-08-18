@@ -1,19 +1,31 @@
 <?php
 
 require_once(__DIR__ . '/inc/bootstrap.php');
+require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
+
+// Nobody creates a list on somebody else's behalf. This runs before anything is
+// read, so an anonymous request never reaches a query at all.
+mcm_require_login();
+$user_id = mcm_current_user_id();
 
 // Kill the script if someone got here improperly
 $list_name = (isset($_POST['list_name'])) ? $_POST['list_name'] : ((isset($_GET['list_name'])) ? $_GET['list_name'] : '');
 $list_description = (isset($_POST['list_description'])) ? $_POST['list_description'] : ((isset($_GET['list_description'])) ? $_GET['list_description'] : '');
-$list_rank = (isset($_POST['list_rank'])) ? $_POST['list_rank'] : ((isset($_GET['list_rank'])) ? $_GET['list_rank'] : '');
+$list_rank_submitted = (isset($_POST['list_rank'])) ? $_POST['list_rank'] : ((isset($_GET['list_rank'])) ? $_GET['list_rank'] : '');
 
 // Bounded validation of the submitted name, before anything is stored. It only
 // rejects; it never rewrites what was typed, and names already in the database
 // are left exactly as they are.
 $list_name_error = mcm_list_name_error($list_name);
 if ($list_name_error !== '') { echo 'Error: ' . $list_name_error; exit(); }
-if ($list_rank === '') { echo 'Error: No list rank given.'; exit(); }
+// The rank is not something anybody types: the page sends the position the new
+// list goes in, so a value that is not one is a malformed request rather than a
+// mistake to explain. It gets the bounded refusal, and the value goes to the log.
+$list_rank = mcm_list_rank($list_rank_submitted);
+if ($list_rank === null) {
+	mcm_json_error(400, 'create_list: refused a list rank that is not a position: ' . mcm_log_detail($list_rank_submitted));
+}
 // Optional:
 //if ($list_description === '') { echo 'Error: No list description given.'; exit(); }
 
@@ -22,27 +34,32 @@ $db_connection = mcm_db_or_fail('create_list');
 
 //echo "inserting new list<br>\n";
 $query = $db_connection->prepare('INSERT INTO movie_lists (user_id, list_name, list_description, list_rank) VALUES (:user_id, :list_name, :list_description, :list_rank)');
-$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
+$query->bindValue(':user_id', $user_id, PDO::PARAM_INT);
 $query->bindValue(':list_name', $list_name, PDO::PARAM_STR);
 $query->bindValue(':list_description', $list_description, PDO::PARAM_STR);
 $query->bindValue(':list_rank', $list_rank, PDO::PARAM_INT);
 mcm_db_execute($query, 'create_list: inserting the list');
-$query = $db_connection->prepare('SELECT movie_list_id FROM movie_lists WHERE user_id = :user_id AND list_rank = :list_rank');
-$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
-$query->bindValue(':list_rank', $list_rank, PDO::PARAM_INT);
-mcm_db_execute($query, 'create_list: reading back the new list');
-$rows = $query->fetchAll(PDO::FETCH_OBJ);
-if (count($rows) > 0) {
-	$row = $rows[0];
-	echo 'movie_list_id:' . $row->movie_list_id;
+
+// The identity of the row that was just inserted, from the insert itself. The
+// read-back this replaces looked the list up by owner and rank, which is not a
+// unique pair: a user whose ranks had drifted got back whichever of the
+// matching rows the server happened to return first, and the page then attached
+// every later change to that other list.
+$movie_list_id = mcm_positive_int($db_connection->lastInsertId());
+if ($movie_list_id === null) {
+	// The insert succeeded and the driver still could not say what it created.
+	// Nothing usable can be sent back, so this is a failure, not a refusal.
+	mcm_log('Database error', 'create_list: the insert reported no identifier for the new list');
+	mcm_fail();
 }
-else echo '2'; // Did not find the list we just created
+
+echo 'movie_list_id:' . $movie_list_id;
 //echo "done<br>\n";
 
 /*// Update our db var
 echo 'greatsuccess';
 $query = $db_connection->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id');
-$query->bindValue(':user_id', $_SESSION['user_id'], PDO::PARAM_INT);
+$query->bindValue(':user_id', $user_id, PDO::PARAM_INT);
 mcm_db_execute($query, 'create_list: listing the lists');
 
 $movie_lists = array();

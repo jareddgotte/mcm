@@ -684,6 +684,11 @@ function mcm_db_reset(array $server)
 {
 	$pdo = mcm_db_app_pdo($server);
 	$pdo->exec('TRUNCATE TABLE users');
+	// The lists and their movies go the same way and for the same reason: a case
+	// that names the list id it seeded needs the counter to start over, and
+	// nothing here is transactional to roll back instead.
+	$pdo->exec('TRUNCATE TABLE movie_lists');
+	$pdo->exec('TRUNCATE TABLE movies');
 
 	return $pdo;
 }
@@ -730,6 +735,81 @@ function mcm_db_seed_user($pdo, $name, $password, array $fields = array())
 	$statement->execute();
 
 	return (int) $pdo->lastInsertId();
+}
+
+/**
+ * Insert one movie list, the way a list that predates this suite would look.
+ *
+ * @param int $share 1 when the list is readable by anybody with its link
+ * @return int the new list's id
+ */
+function mcm_db_seed_list($pdo, $user_id, $name, $rank, $share = 0)
+{
+	$statement = $pdo->prepare(
+		'INSERT INTO movie_lists (user_id, list_name, list_description, list_rank, share)'
+		. ' VALUES (:user_id, :list_name, :list_description, :list_rank, :share)'
+	);
+	$statement->bindValue(':user_id', $user_id, PDO::PARAM_INT);
+	$statement->bindValue(':list_name', $name);
+	$statement->bindValue(':list_description', '');
+	$statement->bindValue(':list_rank', $rank, PDO::PARAM_INT);
+	$statement->bindValue(':share', $share, PDO::PARAM_INT);
+	$statement->execute();
+
+	return (int) $pdo->lastInsertId();
+}
+
+/** Put one movie in a list, so a deletion has something of its own to remove. */
+function mcm_db_seed_movie($pdo, $movie_list_id, $tmdb_movie_id)
+{
+	$statement = $pdo->prepare('INSERT INTO movies (movie_list_id, tmdb_movie_id) VALUES (:movie_list_id, :tmdb_movie_id)');
+	$statement->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
+	$statement->bindValue(':tmdb_movie_id', $tmdb_movie_id, PDO::PARAM_INT);
+	$statement->execute();
+
+	return (int) $pdo->lastInsertId();
+}
+
+/** One list row as an array, or an empty array when there is none. */
+function mcm_db_list_row($pdo, $movie_list_id)
+{
+	$statement = $pdo->prepare('SELECT * FROM movie_lists WHERE movie_list_id = :movie_list_id');
+	$statement->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
+	$statement->execute();
+	$row = $statement->fetch(PDO::FETCH_ASSOC);
+
+	return is_array($row) ? $row : array();
+}
+
+/**
+ * One user's lists as "id:name:rank:share" lines, in rank order.
+ *
+ * A case that has to say "none of this changed" needs the whole picture in one
+ * comparable value, or it ends up asserting the one column it thought of.
+ *
+ * @return array
+ */
+function mcm_db_list_state($pdo, $user_id)
+{
+	$statement = $pdo->prepare('SELECT * FROM movie_lists WHERE user_id = :user_id ORDER BY list_rank ASC, movie_list_id ASC');
+	$statement->bindValue(':user_id', $user_id, PDO::PARAM_INT);
+	$statement->execute();
+
+	$state = array();
+	foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+		$state[] = $row['movie_list_id'] . ':' . $row['list_name'] . ':' . $row['list_rank'] . ':' . $row['share'];
+	}
+	return $state;
+}
+
+/** How many movies a list holds. */
+function mcm_db_movie_count($pdo, $movie_list_id)
+{
+	$statement = $pdo->prepare('SELECT COUNT(*) FROM movies WHERE movie_list_id = :movie_list_id');
+	$statement->bindValue(':movie_list_id', $movie_list_id, PDO::PARAM_INT);
+	$statement->execute();
+
+	return (int) $statement->fetchColumn();
 }
 
 /** One user row as an array, or an empty array when there is none. */
