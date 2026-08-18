@@ -157,9 +157,9 @@ the application. Setup is documented in `README.md`.
   list of who has adopted them, and a page that starts loading them without
   being added there fails the suite.
 - The list mutation endpoints - `create_list.php`, `rename_list.php`,
-  `delete_list.php`, `adjust_lists.php`, `share_lists.php` - are the ones that
-  have adopted them. Each takes the owner from the session and never from the
-  request, and each write names that owner in its own `WHERE` clause as well:
+  `delete_list.php`, `adjust_lists.php`, `share_lists.php` - have adopted them,
+  as have the movie ones below. Each takes the owner from the session and never
+  from the request, and each write names that owner in its own `WHERE` clause:
   the guard refuses the request, and the clause is what leaves the statement
   unable to reach somebody else's row if a guard were ever dropped. A request
   naming several lists checks all of them before writing any, so a range that
