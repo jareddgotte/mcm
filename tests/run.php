@@ -614,6 +614,28 @@ function mcm_cookie_value(array $response, $name)
 }
 
 /**
+ * The whole Set-Cookie line a response sets one cookie with, or an empty string.
+ *
+ * A cookie's attributes cannot be read off the concatenation of every
+ * Set-Cookie header the response carries. The session cookie brings HttpOnly,
+ * SameSite and, over HTTPS, Secure of its own, so a pattern looking for one of
+ * those on a different cookie finds the session cookie's and passes however
+ * that other cookie was actually set.
+ *
+ * The last Set-Cookie for the name wins, which is what a browser would do.
+ */
+function mcm_cookie_header(array $response, $name)
+{
+	$found = '';
+	foreach (mcm_header_values($response, 'Set-Cookie') as $header) {
+		if (strpos($header, $name . '=') === 0) {
+			$found = $header;
+		}
+	}
+	return $found;
+}
+
+/**
  * Parse a response body as HTML, so a case can ask what the browser would
  * actually build rather than which characters happen to be in the response.
  *

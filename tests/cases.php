@@ -2496,13 +2496,11 @@ t_group('cookie hardening', function () {
 	$server  = mcm_server_start($fixture);
 
 	try {
+		// Read from this cookie's own Set-Cookie line: the session cookie in the
+		// same response carries HttpOnly and SameSite of its own, and over HTTPS
+		// Secure too, so a pattern run across both proves nothing about this one.
 		$response = mcm_http($server, '/probe_set_cookie.php');
-		$cookie   = '';
-		foreach (mcm_header_values($response, 'Set-Cookie') as $header) {
-			if (strpos($header, 'rememberme=') === 0) {
-				$cookie = $header;
-			}
-		}
+		$cookie   = mcm_cookie_header($response, 'rememberme');
 
 		t_same(200, $response['status'], 'the cookie probe renders');
 		t_ok($cookie !== '', 'a remember-me cookie is issued', mcm_header_text($response));
@@ -2515,7 +2513,7 @@ t_group('cookie hardening', function () {
 
 		// The same cookie on a request the web server terminated TLS for.
 		$response = mcm_http($server, '/probe_set_cookie_https.php');
-		$cookie   = implode('', mcm_header_values($response, 'Set-Cookie'));
+		$cookie   = mcm_cookie_header($response, 'rememberme');
 		t_matches('/;\s*secure(;|$)/i', $cookie, 'the remember-me cookie is secure when the request arrived over HTTPS');
 		t_matches('/;\s*HttpOnly(;|$)/i', $cookie, 'the secure cookie is HttpOnly as well');
 	} catch (Exception $exception) {
@@ -2532,9 +2530,9 @@ t_group('cookie hardening', function () {
 	$server = mcm_server_start($fixture);
 	try {
 		$response = mcm_http($server, '/probe_set_cookie.php');
-		$cookies  = implode('', mcm_header_values($response, 'Set-Cookie'));
-		t_matches('/rememberme=[^;]*;[^\n]*;\s*secure(;|$)/i', $cookies, 'a configured secure flag reaches the remember-me cookie too');
-		t_matches('/;\s*SameSite=Strict(;|$)/i', $cookies, 'a configured SameSite reaches the remember-me cookie too');
+		$cookie   = mcm_cookie_header($response, 'rememberme');
+		t_matches('/;\s*secure(;|$)/i', $cookie, 'a configured secure flag reaches the remember-me cookie too');
+		t_matches('/;\s*SameSite=Strict(;|$)/i', $cookie, 'a configured SameSite reaches the remember-me cookie too');
 	} catch (Exception $exception) {
 		t_ok(false, 'the configured remember-me cookie cases ran', $exception->getMessage());
 	}
