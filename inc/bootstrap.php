@@ -922,6 +922,14 @@ $mcm_defaults = array(
 	// Only true where a proxy in front of this application terminates TLS and
 	// forwards the request over plain HTTP.
 	'MCM_TRUST_FORWARDED_PROTO'   => false,
+	// The TMDb client in inc/tmdb.php. The origin is TMDb's own and a site has
+	// no reason to change it; the three limits below are what keep an outbound
+	// request bounded, and every one of them applies whether or not the site
+	// configured anything.
+	'MCM_TMDB_BASE_URL'           => 'https://api.themoviedb.org/3',
+	'MCM_TMDB_CONNECT_TIMEOUT_MS' => 3000,
+	'MCM_TMDB_TIMEOUT_MS'         => 8000,
+	'MCM_TMDB_MAX_BYTES'          => 1048576,
 );
 
 foreach ($mcm_defaults as $mcm_name => $mcm_value) {

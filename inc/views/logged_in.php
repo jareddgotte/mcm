@@ -8,17 +8,16 @@ header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
 // (the session itself is started by inc/bootstrap.php)
 
 if (!isset($_SESSION['db_lists'])) $_SESSION['db_lists'] = $db_lists;
-//if (!isset($_SESSION['session'])) $_SESSION['session'] = TMDB_SESSION_ID;
 
-// In a perfect world, this call is only made once per session
-if (!isset($_SESSION['tmdb_obj'])) {
-	$_SESSION['tmdb_obj'] = new TMDb(TMDB_API_KEY);
-}
+// The wrapper holds the TMDb credential, so it lives for this request only.
+// What is worth keeping across requests is its answer, not the object: the
+// configuration below is still fetched once per session.
+$tmdb = new TMDb(TMDB_API_KEY);
 
 // This token will only be set in the login page
 if (isset($_SESSION['token'])) {
 	if (!isset($_SESSION['session'])) { // Make sure we don't request multiple sessions
-		$session = $_SESSION['tmdb_obj']->getAuthSession($_SESSION['token']['request_token']);
+		$session = $tmdb->getAuthSession($_SESSION['token']['request_token']);
 		if (isset($session['status_code'])) {
 			if ($session['status_code'] == 17) { // 17 means "Session denied"
 				$_SESSION['logged_in'] = FALSE; // This variable lets the functions below know if we're logged in or not
@@ -35,7 +34,7 @@ else $_SESSION['logged_in'] = FALSE;
 
 // Get the tmdb config so we can pass it onto the TMDbDisplay class for images
 if (!isset($_SESSION['tmdb_config'])) {
-	$_SESSION['tmdb_config'] = $_SESSION['tmdb_obj']->getConfiguration();
+	$_SESSION['tmdb_config'] = $tmdb->getConfiguration();
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];

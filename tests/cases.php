@@ -3984,3 +3984,410 @@ t_group('browser rendering', function () {
 	}
 	unlink($path);
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * The backend-only TMDb client
+ * ---------------------------------------------------------------------------
+ *
+ * inc/tmdb.php is the one place this site talks to TMDb from, and the cases
+ * below are what hold it to that. They run against tests/pages/tmdb_stub.php on
+ * the loopback interface, with a token that is not a real one: nothing here
+ * contacts TMDb, and nothing here needs a network.
+ *
+ * The endpoint being a setting is what makes that possible - MCM_TMDB_BASE_URL
+ * reaches the client verbatim, the same seam DB_HOST gives the database cases -
+ * and the client's own policy is what keeps the setting from being a way to
+ * send the credential somewhere: a plain-HTTP endpoint is refused unless it is
+ * a loopback address, which never leaves the machine.
+ */
+
+/**
+ * Point a fixture's configuration at a TMDb endpoint, with limits small enough
+ * that a case can reach all three of them in under a couple of seconds.
+ *
+ * @param array $fixture
+ * @param array $defines overrides, as mcm_config_php() takes them
+ */
+function mcm_tmdb_configure(array $fixture, array $defines = array())
+{
+	$defines += array(
+		'MCM_TMDB_CONNECT_TIMEOUT_MS' => 500,
+		'MCM_TMDB_TIMEOUT_MS'         => 500,
+		'MCM_TMDB_MAX_BYTES'          => 4096,
+	);
+	file_put_contents($fixture['public'] . '/inc/config/config.php', mcm_config_php($defines));
+}
+
+/** Run the driver page in one of its modes and return its report. */
+function mcm_tmdb_drive(array $fixture, $mode)
+{
+	$result           = mcm_cli($fixture, 'tmdb_client.php', array('MCM_TMDB_MODE' => $mode));
+	$result['report'] = mcm_report($result['stdout']);
+
+	return $result;
+}
+
+/**
+ * The lines this client wrote to the log, and only those.
+ *
+ * The stub is served by the same fixture and logs to the same file, so a case
+ * about what the client records has to read the client's own lines rather than
+ * whatever else the run happened to produce.
+ */
+function mcm_tmdb_log_lines($log)
+{
+	$found = array();
+	foreach (explode("\n", $log) as $line) {
+		if (strpos($line, 'TMDb request failed') !== false) {
+			$found[] = $line;
+		}
+	}
+	return implode("\n", $found);
+}
+
+/** The fake token every fixture configuration carries. */
+function mcm_tmdb_test_token()
+{
+	return 'test-tmdb-read-token';
+}
+
+t_group('tmdb client transport', function () {
+	$fixture = mcm_fixture('tmdb');
+	$server  = mcm_server_start($fixture);
+	$token   = mcm_tmdb_test_token();
+
+	try {
+		mcm_tmdb_configure($fixture, array(
+			'MCM_TMDB_BASE_URL' => 'http://127.0.0.1:' . $server['port'] . '/tmdb_stub.php',
+		));
+
+		$run    = mcm_tmdb_drive($fixture, 'live');
+		$report = $run['report'];
+
+		/* What a successful request carries ------------------------------------ */
+
+		t_same('yes', $report['echo_ok'], 'a request the stub answers succeeds');
+		t_same('200', $report['echo_status'], 'the success carries the status the stub sent');
+		t_same('ok,status,data', $report['echo_keys'], 'a success is the shape a caller can rely on');
+		// The credential is a header and only a header. Both halves are
+		// asserted off the same request: the stub saw the bearer token, and the
+		// URI the stub saw does not contain it anywhere.
+		t_same('Bearer ' . $token, $report['echo_authorization'], 'the request carries the token as a bearer header');
+		t_same('no', $report['echo_uri_has_token'], 'the URL the endpoint received holds no credential');
+		t_lacks($token, $report['echo_uri'], 'the request line the endpoint received holds no credential');
+		t_contains('application/json', $report['echo_accept'], 'the request asks for JSON');
+		t_same('GET', $report['echo_method'], 'the client only ever makes a GET');
+		t_contains('/tmdb_stub.php/echo', $report['echo_uri'], 'the path the caller asked for is the path that was requested');
+		t_contains('language=en-GB', $report['echo_uri'], 'the query the caller passed is encoded into the URL');
+		t_same('en-GB', $report['echo_query_language'], 'the endpoint reads the query parameter back out');
+		t_same('stub-payload-marker', $report['echo_marker'], 'the decoded body is what the endpoint sent');
+
+		/* The three limits ------------------------------------------------------ */
+
+		// The endpoint sleeps for three times the configured total timeout, so
+		// a client that waited for it would report success a second and a half
+		// later. Both facts are asserted: the category, and that the call came
+		// back long before the endpoint did.
+		t_same('no', $report['slow_ok'], 'a request the endpoint sits on does not succeed');
+		t_same('timeout', $report['slow_category'], 'a request that outlives the total timeout is a timeout');
+		t_ok((int) $report['slow_elapsed_ms'] < 1200, 'the timeout returns well before the endpoint answers', 'elapsed: ' . $report['slow_elapsed_ms'] . 'ms, endpoint answers after 1500ms');
+
+		// The endpoint sends sixteen times the cap, in kilobyte chunks.
+		t_same('no', $report['large_ok'], 'an oversized response does not succeed');
+		t_same('too_large', $report['large_category'], 'a response past the size cap is abandoned');
+
+		/* Redirects and statuses ------------------------------------------------ */
+
+		// The stub's redirect points at /echo, which answers 200 with a marker
+		// in it. A client that followed it would report that success instead.
+		t_same('no', $report['redirect_ok'], 'a redirect is not followed into a success');
+		t_same('upstream', $report['redirect_category'], 'a redirect is reported as a response, not acted on');
+		t_same('302', $report['redirect_status'], 'the redirect status reaches the caller');
+		t_lacks('stub-payload-marker', $report['redirect_message'], 'nothing from behind the redirect reaches the caller');
+
+		t_same('upstream', $report['upstream_category'], 'a server error is an upstream failure');
+		t_same('500', $report['upstream_status'], 'the upstream status reaches the caller');
+		t_same('404', $report['notfound_status'], 'a not-found status reaches the caller as itself');
+		t_same('malformed', $report['notjson_category'], 'a body that is not JSON is refused');
+
+		/* What a failure is allowed to say -------------------------------------- */
+
+		$catalogue = array(
+			'slow'      => 'timeout',
+			'large'     => 'too_large',
+			'redirect'  => 'upstream',
+			'upstream'  => 'upstream',
+			'notjson'   => 'malformed',
+			'bad_path'  => 'configuration',
+			'bad_query' => 'configuration',
+		);
+		foreach ($catalogue as $case => $category) {
+			t_same('ok,category,message,status', $report[$case . '_keys'], 'the ' . $category . ' failure is the shape a caller can rely on');
+			t_same($category, $report[$case . '_category'], 'the ' . $case . ' case is categorised as ' . $category);
+			t_lacks($token, $report[$case . '_message'], 'the ' . $case . ' failure message holds no credential');
+			t_lacks('127.0.0.1', $report[$case . '_message'], 'the ' . $case . ' failure message names no endpoint');
+			t_lacks('tmdb_stub', $report[$case . '_message'], 'the ' . $case . ' failure message names no request URL');
+			t_lacks('url', strtolower($report[$case . '_message']), 'the ' . $case . ' failure message quotes no URL');
+		}
+		// The upstream body said something specific. None of it is repeated.
+		t_lacks('upstream-body-marker', $report['upstream_message'], 'no upstream body reaches the caller');
+		t_lacks('status_code', $report['upstream_message'], 'no upstream error payload reaches the caller');
+		t_same('The movie database did not answer this request.', $report['upstream_message'], 'two upstream statuses share one sentence');
+		t_same($report['upstream_message'], $report['notfound_message'], 'a 404 and a 500 are told apart by status alone');
+
+		// A path or a query the client refuses is refused before anything is
+		// sent, so these two never reached the stub at all.
+		t_same('no', $report['bad_path_ok'], 'a path that is not an absolute path is refused');
+		t_same('no', $report['bad_query_ok'], 'a query parameter that would carry a credential is refused');
+
+		/* What the log is allowed to say ---------------------------------------- */
+
+		$lines = mcm_tmdb_log_lines($run['log']);
+		t_contains('TMDb request failed', $lines, 'every failure is recorded where only the server sees it');
+		t_contains('timeout:', $lines, 'the log says which category the failure was');
+		t_lacks($token, $lines, 'the log holds no credential');
+		t_lacks('127.0.0.1', $lines, 'the log names no endpoint');
+		t_lacks('upstream-body-marker', $lines, 'the log holds no upstream body');
+	} catch (Exception $error) {
+		mcm_server_stop($server);
+		throw $error;
+	}
+	mcm_server_stop($server);
+});
+
+t_group('tmdb client endpoint policy', function () {
+	$fixture = mcm_fixture('tmdb-policy');
+	$server  = mcm_server_start($fixture);
+
+	try {
+		mcm_tmdb_configure($fixture, array(
+			'MCM_TMDB_BASE_URL' => 'http://127.0.0.1:' . $server['port'] . '/tmdb_stub.php',
+		));
+
+		$report = mcm_tmdb_drive($fixture, 'policy')['report'];
+
+		/* Which endpoints the credential may be sent to -------------------------- */
+
+		t_same('ok', $report['endpoint_configured'], "the suite's own loopback endpoint is one the client will use");
+		t_same('ok', $report['endpoint_https'], 'an https endpoint is accepted');
+		t_same('refused', $report['endpoint_http_remote'], 'a plain-HTTP endpoint on a real host is refused');
+		// The carve-out, and its edges. A loopback endpoint never leaves the
+		// machine, which is the whole reason plain HTTP is tolerated there.
+		t_same('ok', $report['endpoint_http_loopback'], 'a plain-HTTP loopback endpoint is accepted');
+		t_same('ok', $report['endpoint_http_localhost'], 'plain HTTP to localhost is accepted');
+		t_same('ok', $report['endpoint_http_ipv6_loopback'], 'plain HTTP to the IPv6 loopback address is accepted');
+		t_same('refused', $report['endpoint_http_lookalike'], 'a host that merely starts with the loopback name is a different host');
+		t_same('refused', $report['endpoint_ftp'], 'an ftp endpoint is refused');
+		t_same('refused', $report['endpoint_file'], 'a file endpoint is refused');
+		t_same('refused', $report['endpoint_relative'], 'an endpoint that is not absolute is refused');
+		t_same('refused', $report['endpoint_empty'], 'an unset endpoint is refused');
+		t_same('refused', $report['endpoint_userinfo'], 'an endpoint carrying credentials of its own is refused');
+		t_same('refused', $report['endpoint_query'], 'an endpoint carrying a query string is refused');
+
+		/* Which paths and queries may be requested ------------------------------- */
+
+		t_same('ok', $report['path_plain'], 'a plain API path is accepted');
+		t_same('ok', $report['path_dotted'], 'a nested API path is accepted');
+		t_same('refused', $report['path_empty'], 'an empty path is refused');
+		t_same('refused', $report['path_relative'], 'a path that does not begin with a slash is refused');
+		t_same('refused', $report['path_traversal'], 'a path holding a relative segment is refused');
+		t_same('refused', $report['path_absolute_url'], 'a whole URL passed as a path is refused');
+		t_same('refused', $report['path_with_query'], 'a path carrying its own query string is refused');
+		t_same('refused', $report['path_double_slash'], 'a path that would change host is refused');
+		t_same('refused', $report['path_newline'], 'a path holding a newline is refused');
+
+		t_same('ok', $report['query_plain'], 'ordinary query parameters are accepted');
+		t_same('refused', $report['query_api_key'], 'a query parameter named api_key is refused');
+		t_same('refused', $report['query_api_key_cased'], 'the api_key refusal does not depend on case');
+		t_same('refused', $report['query_session_id'], 'a query parameter naming a session credential is refused');
+		t_same('refused', $report['query_bad_name'], 'a query parameter with a name this client will not send is refused');
+		t_same('refused', $report['query_array_value'], 'a query parameter that is not a scalar is refused');
+
+		/* Which tokens may be sent ------------------------------------------------ */
+
+		t_same('ok', $report['token_configured'], "the fixture's own token is usable");
+		t_same('refused', $report['token_empty'], 'an unset token is refused rather than sent as an empty bearer');
+		// Header injection: a token holding a newline would end the
+		// Authorization header and send what followed as headers of its own.
+		t_same('refused', $report['token_crlf'], 'a token holding a newline is refused');
+		t_same('refused', $report['token_space'], 'a token holding a space is refused');
+		t_same('refused', $report['token_tab'], 'a token holding a tab is refused');
+
+		/* The limits, and the URL that gets built --------------------------------- */
+
+		t_same('500', $report['limit_connect_ms'], 'the configured connect timeout is the one in force');
+		t_same('500', $report['limit_total_ms'], 'the configured total timeout is the one in force');
+		t_same('4096', $report['limit_max_bytes'], 'the configured size cap is the one in force');
+		t_same('https://api.themoviedb.org/3/movie/550?language=en%20gb', $report['url_built'], 'the query is encoded for a URL rather than pasted into one');
+		t_same('https://api.themoviedb.org/3/movie/550', $report['url_no_query'], 'a request with no query gets no question mark');
+	} catch (Exception $error) {
+		mcm_server_stop($server);
+		throw $error;
+	}
+	mcm_server_stop($server);
+});
+
+t_group('tmdb client transport options', function () {
+	// Nothing here makes a request. The options a request would be made with
+	// are read out of the array itself, so "does not follow a redirect" and
+	// "verifies the peer" are asserted rather than inferred - which matters,
+	// because the suite has no HTTPS endpoint to observe them against.
+	$fixture = mcm_fixture('tmdb-options');
+	mcm_tmdb_configure($fixture, array('MCM_TMDB_BASE_URL' => 'https://api.themoviedb.org/3'));
+
+	$report = mcm_tmdb_drive($fixture, 'options')['report'];
+	$token  = mcm_tmdb_test_token();
+
+	t_same('https://api.themoviedb.org/3/movie/550', $report['opt_url'], 'the handle is given the URL that was asked for');
+	t_same('Authorization: Bearer ' . $token . ' | Accept: application/json', $report['opt_headers'], 'the credential travels as a bearer header');
+	t_same('no', $report['opt_url_has_token'], 'the URL the handle is given holds no credential');
+	t_same('no', $report['opt_elsewhere_has_token'], 'no option other than the header holds the credential');
+
+	t_same('false', $report['opt_followlocation'], 'the handle does not follow a redirect');
+	t_same('0', $report['opt_maxredirs'], 'the handle is allowed no redirects at all');
+	t_same('true', $report['opt_verifypeer'], 'the handle verifies the peer certificate');
+	t_same('2', $report['opt_verifyhost'], 'the handle verifies the certificate names the host');
+	t_same('true', $report['opt_httpget'], 'the handle makes a GET');
+	t_same('500', $report['opt_connect_ms'], 'the handle carries the configured connect timeout');
+	t_same('500', $report['opt_total_ms'], 'the handle carries the configured total timeout');
+	t_same('yes', $report['opt_protocols_https_only'], 'the handle may speak https and nothing else');
+	t_same('yes', $report['opt_redir_https_only'], 'a redirected request could reach https and nothing else');
+	t_same('no', $report['opt_has_http'], 'the handle for a real endpoint may not speak plain HTTP');
+
+	// The loopback handle is the one exception, and it is an exception about
+	// the protocol alone: everything else it is given is the same.
+	t_same('yes', $report['loopback_has_http'], 'the loopback handle may speak plain HTTP');
+	t_same('false', $report['loopback_followlocation'], 'the loopback handle still follows no redirect');
+	t_same('true', $report['loopback_verifypeer'], 'the loopback handle still verifies a peer it is given one for');
+});
+
+t_group('tmdb client configuration failures', function () {
+	// Each of these is a request that is never made. The endpoints named here
+	// are unreachable or refused outright, so no case in this group sends
+	// anything anywhere.
+	$fixture = mcm_fixture('tmdb-config');
+
+	$cases = array(
+		'a plain-HTTP endpoint on a real host' => array(
+			'defines'  => array('MCM_TMDB_BASE_URL' => 'http://api.themoviedb.org/3'),
+			'category' => 'configuration',
+		),
+		'an endpoint that is not a URL' => array(
+			'defines'  => array('MCM_TMDB_BASE_URL' => 'themoviedb.org'),
+			'category' => 'configuration',
+		),
+		'an endpoint the client will not speak to' => array(
+			'defines'  => array('MCM_TMDB_BASE_URL' => 'file:///etc/passwd'),
+			'category' => 'configuration',
+		),
+		'no configured token' => array(
+			'defines'  => array('MCM_TMDB_BASE_URL' => 'https://api.themoviedb.org/3', 'TMDB_READ_ACCESS_TOKEN' => null),
+			'category' => 'configuration',
+		),
+		'an empty token' => array(
+			'defines'  => array('MCM_TMDB_BASE_URL' => 'https://api.themoviedb.org/3', 'TMDB_READ_ACCESS_TOKEN' => ''),
+			'category' => 'configuration',
+		),
+		// Nothing listens on port 1, so this one does leave the process and
+		// comes straight back refused. It is the difference between "this site
+		// is not configured" and "the endpoint did not answer".
+		'a loopback endpoint nothing is listening on' => array(
+			'defines'  => array('MCM_TMDB_BASE_URL' => 'http://127.0.0.1:1/3'),
+			'category' => 'unavailable',
+		),
+	);
+
+	foreach ($cases as $description => $case) {
+		mcm_tmdb_configure($fixture, $case['defines']);
+		$run    = mcm_tmdb_drive($fixture, 'live');
+		$report = $run['report'];
+
+		t_same('no', $report['echo_ok'], $description . ' does not produce a successful request');
+		t_same($case['category'], $report['echo_category'], $description . ' is reported as ' . $case['category']);
+		t_lacks(mcm_tmdb_test_token(), $report['echo_message'], $description . ' says nothing about the credential');
+		t_lacks(mcm_tmdb_test_token(), mcm_tmdb_log_lines($run['log']), $description . ' logs nothing about the credential');
+	}
+});
+
+t_group('tmdb credentials never reach the session store', function () {
+	// The regression this exists for: the site used to keep a credential-bearing
+	// TMDb object in $_SESSION, so the key was written to the session store on
+	// disk for every visitor. Caching the answer is fine and still happens; it
+	// is the client that must not be kept.
+	$fixture = mcm_fixture('tmdb-session');
+	$server  = mcm_server_start($fixture);
+	$token   = mcm_tmdb_test_token();
+
+	try {
+		mcm_tmdb_configure($fixture, array(
+			'MCM_TMDB_BASE_URL' => 'http://127.0.0.1:' . $server['port'] . '/tmdb_stub.php',
+		));
+
+		$report = mcm_tmdb_drive($fixture, 'session')['report'];
+		t_same('yes', $report['session_request_ok'], 'the page really did fetch something to cache');
+		t_same('no', $report['session_serialized_has_token'], 'the session this page holds carries no credential');
+
+		// Not the page's own word for it: what is actually on disk.
+		$files = mcm_session_files($fixture);
+		t_same(1, count($files), 'the page wrote exactly one session file');
+		$stored = file_get_contents($fixture['sessions'] . '/sess_' . $files[0]);
+		t_contains('stub-payload-marker', $stored, "the endpoint's answer really was cached in the session");
+		t_lacks($token, $stored, 'the session file on disk holds no credential');
+		t_lacks('tmdb_obj', $stored, 'no TMDb client object is stored in the session');
+		t_lacks('TMDb', $stored, 'no TMDb object of any kind is serialized into the session');
+	} catch (Exception $error) {
+		mcm_server_stop($server);
+		throw $error;
+	}
+	mcm_server_stop($server);
+});
+
+t_group('tmdb credential hygiene in the source', function () {
+	$sources = mcm_php_sources(MCM_REPO_ROOT);
+	t_ok(count($sources) > 0, 'there are project sources to read');
+
+	// The two greps the issue asks for, run over the project's own files.
+	// Comments count: a commented-out reference to a removed constant is still
+	// a reference somebody will follow.
+	foreach ($sources as $file) {
+		$name   = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		$source = file_get_contents($file);
+		t_ok(strpos($source, 'SESSION_ID') === false, $name . ' holds no reference to the removed auth-session constant');
+		t_ok(strpos($source, 'tmdb_obj') === false, $name . ' keeps no TMDb client in the session');
+	}
+
+	// Only the client reads the token, and no browser-served script names it.
+	foreach ($sources as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		$reads = mcm_count_constant_reads($file, 'TMDB_READ_ACCESS_TOKEN');
+		if ($name === 'inc/tmdb.php') {
+			t_same(1, $reads, 'inc/tmdb.php is the one place that reads the token');
+		} else {
+			t_same(0, $reads, $name . ' does not read the TMDb token');
+		}
+	}
+	foreach (mcm_browser_sources(MCM_REPO_ROOT) as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		t_ok(strpos(file_get_contents($file), 'TMDB_READ_ACCESS_TOKEN') === false, $name . ' does not name the TMDb token');
+	}
+
+	// The tracked example configuration is documentation, so it holds
+	// placeholders and only placeholders.
+	$example = file_get_contents(MCM_REPO_ROOT . '/inc/config/example_config.php');
+	t_contains('TMDB_READ_ACCESS_TOKEN', $example, 'the example configuration documents the read access token');
+	t_ok(strpos($example, 'TMDB_SESSION_ID') === false, 'the example configuration no longer defines the auth-session constant');
+	t_matches('#define\("TMDB_READ_ACCESS_TOKEN", "x+"\)#', $example, 'the example read access token is a placeholder');
+	t_matches('#define\("TMDB_API_KEY", "x+"\)#', $example, 'the example API key is still a placeholder');
+
+	// The client is loaded by nothing yet, and that is deliberate: the entry
+	// point that uses it is separate work. What must be true today is that
+	// requiring it is all it takes, and that it declares functions and runs
+	// nothing on its own.
+	$client = MCM_REPO_ROOT . '/inc/tmdb.php';
+	t_ok(is_readable($client), 'the client file is there to be included');
+	t_same(0, mcm_count_debug_output($client), 'the client dumps nothing into the response');
+	t_same(0, mcm_count_new($client, 'TMDb'), 'the client does not build the old vendored wrapper');
+	t_same(1, mcm_count_calls($client, 'curl_init'), 'the client opens exactly one handle, in one place');
+	t_same(1, mcm_count_calls($client, 'curl_close'), 'the handle holding the credential is closed again');
+});

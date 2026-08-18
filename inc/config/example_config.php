@@ -11,8 +11,41 @@ if (!defined('MCM_BOOTSTRAP')) {
 	exit('Forbidden');
 }
 
+/**
+ * Configuration for: The Movie Database (TMDb)
+ *
+ * Both values below are credentials and both are backend-only: nothing here is
+ * ever rendered into a page, put in a URL, kept in a session or handed to a
+ * browser. Placeholders only in this file - your real values belong in
+ * config.php, which is not in the repository.
+ */
+
+/** the v3 API key the older vendored wrapper still uses. */
 define("TMDB_API_KEY", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This key comes from TMDB
-define("TMDB_SESSION_ID", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This session comes from TMDB
+/** the v4 read access token inc/tmdb.php sends as "Authorization: Bearer ...". */
+define("TMDB_READ_ACCESS_TOKEN", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This token comes from TMDB
+
+/**
+ * Configuration for: what an outbound TMDb request is allowed to cost
+ *
+ * Every setting below is OPTIONAL and every one of them already has the value
+ * shown, so a request is bounded whether or not you touch this section.
+ * Uncomment a line only when you want a different value.
+ *
+ * The endpoint is TMDb's own and a production site has no reason to change it.
+ * It is a setting at all because the test suite points it at a local stub, and
+ * because it is checked: anything other than an https URL - or a loopback
+ * address, which never leaves the machine - is refused rather than sent to.
+ */
+
+/** the API origin. No trailing slash, no query string. */
+//define('MCM_TMDB_BASE_URL', 'https://api.themoviedb.org/3');
+/** how long a request may spend connecting, in milliseconds. */
+//define('MCM_TMDB_CONNECT_TIMEOUT_MS', 3000);
+/** how long a request may take in total, in milliseconds. */
+//define('MCM_TMDB_TIMEOUT_MS', 8000);
+/** how much of a response will be read before it is abandoned, in bytes. */
+//define('MCM_TMDB_MAX_BYTES', 1048576);
 
 /**
  * Configuration file for: Database Connection
