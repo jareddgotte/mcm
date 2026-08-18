@@ -34,6 +34,9 @@ This repository contains a placeholder database schema and a placeholder configu
 ### Tests
 Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  Every case works on a throw-away copy of the site under the system temp directory, so running the suite never touches your checkout or your configuration.  Add `--filter=<text>` to run a single group.
 
+#### The browser page
+The suite is a PHP one and drives no browser.  What a browser builds out of a hostile list name or movie title is answered by `/tests/browser/xss.html`, which you open by hand — in a browser directly, or over any local web server.  It renders a hostile list name, movie title, poster path and movie identifier through the real `/js/dom.js` and `/js/mc.js`, then reports what the document ended up holding; the summary at the top is green when every check passed.  Nothing is installed and no server is needed.
+
 #### The optional database group
 Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.
 

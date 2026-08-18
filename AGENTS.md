@@ -57,6 +57,13 @@ the application. Setup is documented in `README.md`.
   and the body as its fourth and fifth arguments. The ownership cases build
   their fixture table in SQLite in memory, and skip where the runtime has no
   SQLite driver, so the suite still needs no database.
+- The suite has no browser and does not want one. `tests/browser/xss.html` is
+  opened by hand instead: it renders a hostile list name, movie title, poster
+  path and movie identifier through the real scripts and reports what the
+  document ended up holding. Its own stylesheet keeps the tab strip on one line
+  on purpose - TabDrop moves any tab that wrapped into a dropdown, and
+  `renameList()` addresses tabs by position, so a wrapped strip makes it rename
+  the wrong tab.
 - One group is optional and is the only part that wants more than a PHP CLI:
   `tests/database.php` runs a private, throw-away database server when
   `MCM_TEST_MYSQLD` or `PATH` offers a `mariadbd`/`mysqld`, and otherwise prints
@@ -142,7 +149,14 @@ the application. Setup is documented in `README.md`.
 - Escaping is rendering only. Stored values keep the exact bytes that were
   submitted, and `mcm_list_name_error()` rejects a bad list name rather than
   rewriting it, so a name that already contains markup keeps working.
-  Browser-side rendering (`js/mc.js`, `js/share.js`) is not covered yet.
+- The browser has the same duty for what it renders after the page loads, and
+  `js/dom.js` is where it discharges it: the page scripts build elements and
+  assign a value as text or as an attribute instead of concatenating it into
+  markup. `js/mc.js` and `js/share.js` render posters, typeahead suggestions and
+  list headings from those builders, and every page that loads one of them loads
+  `js/dom.js` first. The suite reads both scripts and fails on a value joined to
+  markup or handed to `.html()`; what a browser then builds is
+  `tests/browser/xss.html`.
 - `inc/security.php`, loaded by the bootstrap, is where random tokens,
   constant-time comparison, password hashing and session identifier renewal
   live. Login and Registration call it rather than PHP's functions directly, so

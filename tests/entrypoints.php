@@ -1,7 +1,9 @@
 <?php
 
 /**
- * Static checks over the project's PHP sources, using PHP's own tokenizer.
+ * Static checks over the project's own sources: the PHP through PHP's own
+ * tokenizer, and the browser scripts through the small scanner at the end of
+ * this file.
  *
  * Comments are stripped before any check, so a sentence such as "this is the
  * only session_start() in the application" cannot be mistaken for a call.
@@ -729,4 +731,198 @@ function mcm_statement_owner_qualified($sql)
 	}
 
 	return false;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * The browser scripts
+ * ---------------------------------------------------------------------------
+ *
+ * The server escapes what it renders; the page scripts have the same duty for
+ * what they render afterwards, and js/dom.js is where they do it. These checks
+ * read the scripts and state the two rules that keep a value out of markup:
+ * markup this project wrote is never concatenated with a value, and .html() is
+ * never handed anything but a literal.
+ *
+ * A rule about the source is not a rule about a browser. What the browser then
+ * builds out of a hostile list name is tests/browser/xss.html, which is opened
+ * by hand.
+ */
+
+/**
+ * The browser scripts this project writes. The vendored libraries in js/ and
+ * everything under js/libs/ are third-party downloads and are not this
+ * project's to rewrite.
+ */
+function mcm_browser_sources($root)
+{
+	$vendored = array('bootstrap-tabdrop.js', 'jquery.lazyload.js', 'jquery.lazyload.min.js', 'typeahead.bundle.min.js');
+	$found    = array();
+
+	foreach (glob($root . '/js/*.js') as $file) {
+		if (!in_array(basename($file), $vendored, true)) {
+			$found[] = $file;
+		}
+	}
+	sort($found);
+	return $found;
+}
+
+/**
+ * A script with every string literal replaced by a marker and every comment
+ * dropped, so a check can read what surrounds a literal without parsing
+ * JavaScript. A marker is "\x01<index>\x01", and the literals come back beside
+ * the code.
+ *
+ * Strings and comments are recognised in one pass, in source order, which is
+ * what keeps them from being confused with one another: the "//" inside
+ * 'http://example.com' is inside a string that has already been matched, and an
+ * apostrophe in a comment never starts a string.
+ *
+ * The one construct this does not model is a regular expression literal, whose
+ * quotes would be read as the start of a string. The scripts this runs over
+ * have none, and mcm_js_regex_literals() keeps it that way.
+ *
+ * @return array 'code' => the marked source, 'literals' => index => literal
+ */
+function mcm_js_markers($source)
+{
+	$literals = array();
+	$pattern  = '~(//[^\n]*)|(/\*.*?\*/)|(\'(?:\\\\.|[^\'\\\\])*\')|("(?:\\\\.|[^"\\\\])*")|(`(?:\\\\.|[^`\\\\])*`)~s';
+
+	$code = preg_replace_callback($pattern, function ($match) use (&$literals) {
+		if (substr($match[0], 0, 1) === '/') {
+			return ' ';
+		}
+		$literals[] = $match[0];
+
+		return "\x01" . (count($literals) - 1) . "\x01";
+	}, $source);
+
+	return array('code' => $code, 'literals' => $literals);
+}
+
+/** A short, readable piece of scanned code for a failure message. */
+function mcm_js_excerpt($text)
+{
+	$text = preg_replace('~\x01\d+\x01~', '<string>', $text);
+	$text = trim(preg_replace('~\s+~', ' ', $text));
+	if (strlen($text) > 60) {
+		$text = substr($text, 0, 60) . '...';
+	}
+	return $text;
+}
+
+/** Whether a string literal is markup rather than a selector, a class or a message. */
+function mcm_js_is_markup($literal)
+{
+	return preg_match('~<\s*[a-zA-Z/!]~', $literal) === 1;
+}
+
+/**
+ * Places in a browser script where a value is joined to markup.
+ *
+ * Markup the file wrote itself is fine, and so is a value in a selector, a
+ * class name or a URL: the defect is the join, because that is the only way a
+ * list name or a TMDb title can become tags. Both sides of the "+" are checked,
+ * and "+=" is not a join of that kind - it appends this file's own markup to a
+ * string it is building.
+ *
+ * Returns the problems found; empty means the file builds no markup out of a
+ * value.
+ */
+function mcm_js_markup_problems($file)
+{
+	$scan     = mcm_js_markers(file_get_contents($file));
+	$code     = $scan['code'];
+	$problems = array();
+
+	foreach ($scan['literals'] as $index => $literal) {
+		if (!mcm_js_is_markup($literal)) {
+			continue;
+		}
+
+		// A template literal carries its own interpolation, so the markup and
+		// the value are already one string.
+		if (substr($literal, 0, 1) === '`' && strpos($literal, '${') !== false) {
+			$problems[] = 'a value is interpolated into markup: ' . mcm_js_excerpt($literal);
+			continue;
+		}
+
+		$marker = "\x01" . $index . "\x01";
+		$at     = strpos($code, $marker);
+		if ($at === false) {
+			continue;
+		}
+
+		$after = ltrim(substr($code, $at + strlen($marker)));
+		if (substr($after, 0, 1) === '+' && substr($after, 1, 1) !== '=' && substr($after, 1, 1) !== '+') {
+			$operand = ltrim(substr($after, 1));
+			if (substr($operand, 0, 1) !== "\x01") {
+				$problems[] = 'a value is concatenated onto markup: ' . mcm_js_excerpt($literal) . ' + ' . mcm_js_excerpt(substr($operand, 0, 40));
+			}
+		}
+
+		$before = rtrim(substr($code, 0, $at));
+		if (substr($before, -1) === '+' && substr($before, -2, 1) !== '+') {
+			$operand = rtrim(substr($before, 0, -1));
+			if (substr($operand, -1) !== "\x01") {
+				$problems[] = 'markup is concatenated onto a value: ' . mcm_js_excerpt(substr($operand, -40)) . ' + ' . mcm_js_excerpt($literal);
+			}
+		}
+	}
+	return $problems;
+}
+
+/**
+ * .html() calls in a browser script that assign something other than a literal.
+ *
+ * .html() parses whatever it is given, so a value handed to it is markup
+ * however carefully the rest of the file was written. Reading with .html(), and
+ * assigning a literal this file wrote, are both fine.
+ */
+function mcm_js_html_assignments($file)
+{
+	$scan   = mcm_js_markers(file_get_contents($file));
+	$code   = $scan['code'];
+	$found  = array();
+	$offset = 0;
+
+	while (($at = strpos($code, '.html(', $offset)) !== false) {
+		$offset   = $at + 6;
+		$argument = ltrim(substr($code, $offset));
+
+		// ".html()" reads; ".html('<p>x</p>')" assigns markup from this file.
+		if (substr($argument, 0, 1) === ')' || preg_match('~^\x01\d+\x01\s*\)~', $argument) === 1) {
+			continue;
+		}
+		// The argument alone, so the failure message names the call rather than
+		// the line that happened to follow it.
+		$found[] = mcm_js_excerpt(substr($argument, 0, min(strcspn($argument, ");,\n"), 60)));
+	}
+	return $found;
+}
+
+/**
+ * Regular expression literals in a browser script.
+ *
+ * The scanner above reads a "/" as division, so a regular expression holding a
+ * quote would derail it. This looks for the shape of one - a "/" where an
+ * expression can start - and the suite refuses it, so the scanner's one blind
+ * spot cannot open quietly.
+ */
+function mcm_js_regex_literals($file)
+{
+	// The marked code, so a slash inside a string or a comment - the "//" of a
+	// URL, most of all - is not mistaken for one.
+	$scan  = mcm_js_markers(file_get_contents($file));
+	$code  = $scan['code'];
+	$found = array();
+
+	if (preg_match_all('~(?:^|[=(,:!&|?{};]|\breturn\b)\s*/(?![/*])~m', $code, $matches, PREG_OFFSET_CAPTURE) > 0) {
+		foreach ($matches[0] as $match) {
+			$found[] = mcm_js_excerpt(substr($code, $match[1], 40));
+		}
+	}
+	return $found;
 }

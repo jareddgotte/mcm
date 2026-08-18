@@ -42,16 +42,16 @@ function displayTable () {
 	$('#' + currentSort).parent().addClass('alert-info disabled')
 	$('#' + currentOrder).parent().addClass('alert-info disabled')
 
-	// Create the HTML we are going to use as our table of movies
-	html = '<div class="posters">'
+	// Build the table of movies as elements: a title that looks like markup is
+	// still only a title, so it goes in as an attribute rather than as tags.
+	var $posters = $('<div>').addClass('posters')
 	$.each(ListItemsJSON, function (i, v) {
 		if (v.poster_path !== null) {
-			html += '<img class="lazy img-thumbnail" id="' + v.movie_id + '" data-original="' + base_url + poster_size_big + v.poster_path + '" alt="' + v.title + "\">\n"
+			$posters.append(mcmPosterImage(v, base_url, poster_size_big))
 		}
 	})
-	html += '</div>'
 	//console.log(currentList)
-	$('#' + currentList).html(html) // Set that HTML now
+	$('#' + currentList).empty().append($posters) // Put that table in place now
 	
 	$('.tab-pane img:first-child').bind('transitionend webkitTransitionEnd oTransitionEnd', function(e) {
 		if (e.originalEvent.propertyName === 'width') {
@@ -211,8 +211,9 @@ $(function () {
 		displayTable()
 	})
 
-	// SEARCH COLLECTION FOR MOVIE
-	var template = '<p><img class="img-thumbnail {{classed}}" src="' + base_url + 'w45{{tmdb_poster_path}}" alt="{{tmdb_title}}" width="55" height="78"><span><strong>{{tmdb_title}}</strong> <small>(<abbr title="{{tmdb_release_date}}">{{tmdb_release_date_abbr}}</abbr>)</small></span></p>'
+	// SEARCH COLLECTION FOR MOVIE. The suggestion is built out of elements (see
+	// js/dom.js) instead of pasting a TMDb title into a string of markup.
+	var template = function (datum) { return mcmSuggestionMarkup(datum, base_url) }
 	if (db.length > 0) {
 				var taObjs = []
 		var bhObjs = []
@@ -235,8 +236,10 @@ $(function () {
 			,	displayKey: 'tmdb_title'
 			,	source: bhObjs[i].ttAdapter()
 			,	templates: {
-					suggestion: Handlebars.compile(template)
-				,	header: '<h4>' + e.list_name + '</h4>'
+					suggestion: template
+					// The heading names a list, so typeahead is handed the
+					// element rather than a string it would parse.
+				,	header: function () { return mcmListHeader(e.list_name) }
 				}
 			})
 		})

@@ -45,7 +45,9 @@ $db_var = mcm_js($db_var);
 // include html header and display php-login message/error
 $title = 'My Collection';
 $post_styles = array('tabdrop', 'typeahead.js-bootstrap', 'mc');
-$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'libs/handlebars.min', 'typeahead.bundle.min', 'share'); // , 'jquery.sortable'
+// js/dom.js holds the element builders js/share.js renders values through, so
+// it loads ahead of it. Handlebars went with the string template it compiled.
+$post_scripts = array('bootstrap-tabdrop', 'jquery.lazyload.min', 'typeahead.bundle.min', 'dom', 'share'); // , 'jquery.sortable'
 $script = "
 //console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
 //console.log('" . ""/*count($merged)*/ . "'); // debug how many movies I have
