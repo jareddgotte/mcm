@@ -1964,12 +1964,12 @@ t_group('the csrf token reaches the browser and stays inside this site', functio
 	$prefilter = mcm_js_call_body($script, '$.ajaxPrefilter');
 	t_ok($prefilter !== '', 'js/mc.js installs a shared prefilter');
 	t_same(1, substr_count($source, '$.ajaxPrefilter('), 'and exactly one of them');
-	t_contains('setRequestHeader', $prefilter, 'the prefilter is what puts the token on a request');
-	t_contains('csrf_token', $prefilter, 'and what it puts there is the token the page was given');
+	t_contains('setRequestHeader', $prefilter, "the filter's body calls setRequestHeader");
+	t_contains('csrf_token', $prefilter, "the filter's body references the page's token variable");
 	// Read when the request is made, not when the file loads: the header
 	// renders every script file before the inline block that defines the token,
 	// so at load time there is nothing to read.
-	t_contains('typeof csrf_token', $prefilter, 'the prefilter reads the token at request time');
+	t_contains('typeof csrf_token', $prefilter, "the filter's body guards on typeof csrf_token rather than capturing it at load");
 	$header_view = mcm_flat_source(MCM_REPO_ROOT . '/inc/views/header.php');
 	t_ok(strpos($header_view, 'post_scripts') < strpos($header_view, '$script'), 'the page loads its script files before the block that defines the token');
 
@@ -1993,10 +1993,10 @@ t_group('the csrf token reaches the browser and stays inside this site', functio
 	// before any prefilter runs. Reading that answer is the point, because a
 	// second implementation of the same rule in this file is a second
 	// implementation to get wrong.
-	t_contains('crossDomain', $prefilter, 'the prefilter asks jQuery whether the request leaves this site');
+	t_contains('crossDomain', $prefilter, "the filter's body references jQuery's crossDomain answer rather than testing the URL itself");
 	t_ok(
 		strpos($prefilter, 'crossDomain') < strpos($prefilter, 'setRequestHeader'),
-		'and asks before it puts anything on the request'
+		'crossDomain appears before setRequestHeader in the filter\'s body'
 	);
 	// No pattern of its own, which is also what keeps this file readable by the
 	// scanner the browser-rendering checks are built on.
