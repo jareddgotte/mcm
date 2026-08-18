@@ -734,7 +734,10 @@ function mcm_default_content_security_policy()
 		// The pages carry inline <script> blocks and load jQuery and Bootstrap
 		// from these two hosts. A host with no scheme matches both http and
 		// https, which is what the protocol-relative src attributes need.
-		"script-src 'self' 'unsafe-inline' ajax.googleapis.com netdna.bootstrapcdn.com",
+		// 'unsafe-eval' is here because the search box compiles its suggestion
+		// template with Handlebars, which builds the template into a function;
+		// it comes back out when those templates are compiled ahead of time.
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval' ajax.googleapis.com netdna.bootstrapcdn.com",
 		"style-src 'self' 'unsafe-inline' netdna.bootstrapcdn.com",
 		"font-src 'self' data: netdna.bootstrapcdn.com",
 		// Poster addresses are built on a base URL TMDb returns at run time, so
@@ -742,7 +745,10 @@ function mcm_default_content_security_policy()
 		"img-src 'self' data: http: https:",
 		"connect-src 'self' api.themoviedb.org",
 		"frame-src www.youtube.com",
-		"object-src 'none'",
+		// 'self' rather than 'none': the signed-in page still loads a Flash
+		// clipboard shim from this origin. No browser runs it any more, and the
+		// day that library goes this can be 'none'.
+		"object-src 'self'",
 		"base-uri 'self'",
 		"form-action 'self'",
 		"frame-ancestors 'self'",

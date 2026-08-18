@@ -2344,7 +2344,7 @@ t_group('security headers', function () {
 
 		$policy = isset($policy[0]) ? $policy[0] : '';
 		t_contains("default-src 'self'", $policy, 'the policy starts from this origin only');
-		t_contains("object-src 'none'", $policy, 'the policy allows no plugin content');
+		t_contains("object-src 'self'", $policy, 'the policy allows no plugin content from anywhere else');
 		t_contains("base-uri 'self'", $policy, 'the policy pins the document base to this origin');
 		t_contains("form-action 'self'", $policy, 'the policy submits forms to this origin');
 		t_contains("frame-ancestors 'self'", $policy, 'the policy names who may frame these pages');
@@ -2357,6 +2357,10 @@ t_group('security headers', function () {
 		t_contains('api.themoviedb.org', $policy, 'the policy names the search endpoint the type-ahead calls');
 		t_contains('www.youtube.com', $policy, 'the policy names the video host the trailer dialog frames');
 		t_contains("'unsafe-inline'", $policy, 'the policy admits the inline blocks the views are built out of');
+		// Both of these describe something the site does today rather than
+		// something it should do. A policy that reported on every search and
+		// every signed-in page view would be read once and then ignored.
+		t_contains("'unsafe-eval'", $policy, 'the policy admits the template compilation the search box does');
 
 		// Deferred on purpose, and the assertion has teeth only next to one
 		// that proves the header-sending code ran on this same response.
