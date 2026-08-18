@@ -3133,23 +3133,20 @@ t_group('movie endpoints refuse before the database', function () {
 	mcm_server_stop($server);
 });
 
-t_group('movie endpoint guard shape', function () {
-	// The order of two guards is a fact about the source: a request that is
-	// allowed cannot show that ownership was settled before the first query,
-	// and a request that is refused cannot show it either. These read the
-	// endpoints themselves, with comments stripped, so a sentence describing a
-	// call is never mistaken for one.
-	$endpoints = array(
-		'add_movie.php'    => 1,
-		'delete_movie.php' => 1,
-		// A move has two ends and therefore two owners to check.
-		'move.php'         => 2,
-		'import_list.php'  => 1,
-	);
+t_group('movie endpoint guard source checks of last resort', function () {
+	// Guard order and scope are proven behaviourally by 'movie ownership over a
+	// real database': a missing or misplaced guard, a move missing either end,
+	// an unscoped duplicate check, a GET that still mutates and a POST that
+	// mutates without a CSRF token all show up there, because a refused request
+	// is snapshotted before and after and a permitted one is checked against
+	// what it actually wrote. What is left here is only what that group cannot
+	// reach: import_list.php's own call out to TMDb, which no case in this
+	// suite makes, so nothing behavioural can show that ownership was settled
+	// before it or that its duplicate check stayed scoped to one account.
+	$endpoints = array('add_movie.php', 'delete_movie.php', 'move.php', 'import_list.php');
 
-	foreach ($endpoints as $page => $owner_checks) {
-		$file   = MCM_REPO_ROOT . '/' . $page;
-		$source = mcm_flat_source($file);
+	foreach ($endpoints as $page) {
+		$file = MCM_REPO_ROOT . '/' . $page;
 
 		$loads = false;
 		foreach (mcm_include_statements($file) as $statement) {
@@ -3160,37 +3157,20 @@ t_group('movie endpoint guard shape', function () {
 			}
 		}
 		t_ok($loads, $page . ' loads the guards once, by a path anchored to its own directory');
-
-		t_same(1, mcm_count_calls($file, 'mcm_require_login'), $page . ' asks who is signed in exactly once');
-		t_same($owner_checks, mcm_count_calls($file, 'mcm_require_list_owner'), $page . ' checks ' . $owner_checks . ' list owner(s)');
-		t_same(0, mcm_count_calls($file, 'mcm_json_error'), $page . ' refuses through the guards rather than by hand');
-
-		// Making these endpoints POST-only and requiring a CSRF token is
-		// separate work with its own issue. Asserting their absence keeps this
-		// change to what it says it is, and makes the later one visible.
-		t_same(0, mcm_count_calls($file, 'mcm_require_post'), $page . ' does not enforce a request method yet');
-		t_same(0, mcm_count_calls($file, 'mcm_require_csrf'), $page . ' does not require a CSRF token yet');
-
-		$login     = strpos($source, 'mcm_require_login');
-		$connect   = strpos($source, 'mcm_db_or_fail');
-		$ownership = strpos($source, 'mcm_require_list_owner');
-		$query     = strpos($source, 'prepare');
-
-		t_ok($login !== false && $connect !== false && $ownership !== false && $query !== false, $page . ' has all four steps');
-		t_ok($login < $connect, $page . ' asks who is signed in before it opens a connection');
-		t_ok($ownership < $query, $page . ' settles whose list this is before it prepares a single query');
-
-		// Which user the page works as comes from the guards, so it is the same
-		// value ownership was decided on rather than whatever the session
-		// happens to hold.
-		t_lacks("\$_SESSION [ 'user_id' ]", $source, $page . ' takes the owner from the guards, not straight out of the session');
 	}
+
+	$import_source = mcm_flat_source(MCM_REPO_ROOT . '/import_list.php');
+	$ownership     = strpos($import_source, 'mcm_require_list_owner');
+	$tmdb_call     = strpos($import_source, 'getList');
+
+	t_ok($ownership !== false && $tmdb_call !== false, 'import_list.php has both an ownership check and a call to TMDb');
+	t_ok($ownership < $tmdb_call, 'import_list.php settles ownership before it calls TMDb');
 
 	// Duplicate detection is a question about one user's collection. Without the
 	// owner in the WHERE clause, import_list.php was asking whether anybody at
 	// all had the film, and silently skipped every film another account owned.
 	foreach (array('add_movie.php', 'import_list.php') as $page) {
-		$source = file_get_contents(MCM_REPO_ROOT . '/' . $page);
+		$source = mcm_flat_source(MCM_REPO_ROOT . '/' . $page);
 
 		t_contains(
 			'JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id',
@@ -3320,7 +3300,10 @@ t_group('movie ownership over a real database', function () {
 			t_same($before, call_user_func($state), $description . ' changes nothing at all');
 		}
 
-		// The owner's own list still works, and answers what it always did.
+		// The owner's own list still works, and answers what it always did. This
+		// request also carries no CSRF token, which is not yet required: making
+		// it required is separate work with its own issue, and this is the
+		// behavioural evidence that will fail once it lands.
 		$before   = call_user_func($state);
 		$response = mcm_http_post($server_handle, '/add_movie.php', array('movie_list_id' => $alice_two) + $new_film, $as_alice);
 
@@ -3373,6 +3356,17 @@ t_group('movie ownership over a real database', function () {
 		t_same(count($before['movies']) - 1, count($after['movies']), 'exactly one row goes');
 		t_lacks($alice_row . '|' . $alice_one . '|101', implode("\n", $after['movies']), 'the row she deleted is the one that went');
 		t_contains($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), "the other account's rows are untouched");
+
+		// A GET is not yet refused for these endpoints either - method
+		// enforcement is the same separate issue as the CSRF requirement above -
+		// so the owner's mutation goes through that way too.
+		$before   = call_user_func($state);
+		$response = mcm_http($server_handle, '/delete_movie.php?' . http_build_query(array('movie_list_id' => $bob_one, 'tmdb_movie_id' => 102)), $as_bob);
+		$after    = call_user_func($state);
+
+		t_contains('greatsuccess', $response['body'], "the owner's GET still performs the delete");
+		t_same(count($before['movies']) - 1, count($after['movies']), 'the GET delete removes exactly one row');
+		t_lacks($bob_row . '|' . $bob_one . '|102', implode("\n", $after['movies']), 'the row named in the GET is the one that went');
 
 		/* Moving ------------------------------------------------------------ */
 

@@ -174,8 +174,9 @@ the application. Setup is documented in `README.md`.
   `move.php` checks both ends, and `import_list.php` settles ownership before it
   calls TMDb, so a refusal costs no network request. Duplicate detection is
   scoped to the asking user in both `add_movie.php` and `import_list.php`.
-  POST-only and CSRF are deliberately not applied there yet; the suite asserts
-  their absence so that the change which adds them is visible.
+  POST-only and CSRF are deliberately not applied there yet; the suite proves
+  it behaviourally - an owner's GET still mutates and an owner's POST without a
+  CSRF token still mutates - so that the change which adds them is visible.
 - A refusal answers with a status from `mcm_json_error_catalogue()` and that
   status's fixed body, so two different reasons sharing a status cannot be told
   apart from outside; the reason goes to the log through `mcm_log()`. Tokens are
