@@ -169,7 +169,12 @@ function mcm_tmdb_is_loopback_host($host)
 {
 	$host = strtolower(trim($host, '[]'));
 
-	return ($host === 'localhost' || $host === '::1' || strpos($host, '127.') === 0);
+	if ($host === 'localhost' || $host === '::1') {
+		return true;
+	}
+
+	$ip = filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
+	return ($ip !== false && strpos($ip, '127.') === 0);
 }
 
 /**

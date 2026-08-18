@@ -54,6 +54,9 @@ if ($mcm_mode === 'policy') {
 	mcm_tmdb_policy('endpoint_http_ipv6_loopback', mcm_tmdb_endpoint_error('http://[::1]:8080/3'));
 	// A host that merely starts with the loopback name is a different host.
 	mcm_tmdb_policy('endpoint_http_lookalike', mcm_tmdb_endpoint_error('http://localhost.example.com/3'));
+	// A host that merely starts with the loopback IP literal as a string is a
+	// different, non-loopback DNS name that resolves off the machine.
+	mcm_tmdb_policy('endpoint_http_ip_lookalike', mcm_tmdb_endpoint_error('http://127.0.0.1.attacker.example/3'));
 	mcm_tmdb_policy('endpoint_ftp', mcm_tmdb_endpoint_error('ftp://api.themoviedb.org/3'));
 	mcm_tmdb_policy('endpoint_file', mcm_tmdb_endpoint_error('file:///etc/passwd'));
 	mcm_tmdb_policy('endpoint_relative', mcm_tmdb_endpoint_error('/3'));

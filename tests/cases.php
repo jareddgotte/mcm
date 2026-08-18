@@ -4178,6 +4178,7 @@ t_group('tmdb client endpoint policy', function () {
 		t_same('ok', $report['endpoint_http_localhost'], 'plain HTTP to localhost is accepted');
 		t_same('ok', $report['endpoint_http_ipv6_loopback'], 'plain HTTP to the IPv6 loopback address is accepted');
 		t_same('refused', $report['endpoint_http_lookalike'], 'a host that merely starts with the loopback name is a different host');
+		t_same('refused', $report['endpoint_http_ip_lookalike'], 'a host that merely starts with the loopback IP literal as a string is a different host');
 		t_same('refused', $report['endpoint_ftp'], 'an ftp endpoint is refused');
 		t_same('refused', $report['endpoint_file'], 'a file endpoint is refused');
 		t_same('refused', $report['endpoint_relative'], 'an endpoint that is not absolute is refused');
