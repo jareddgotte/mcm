@@ -1889,15 +1889,23 @@ t_group('guards are additive', function () {
  *
  * The guards above answer "was this request made from a page this site handed
  * out". That is only worth anything if the page really does hand the token out,
- * really does send it back, and really does keep it to itself on the way. Two
- * of those three are claims about a file the suite cannot execute - there is no
- * JavaScript runtime here, and there will not be one - so they are read off the
- * construct that makes them, the same way the PHP claims above are: the
- * prefilter's own body, and the object literal of each call.
+ * really does send it back, and really does keep it to itself on the way.
  *
- * The pattern the browser decides by is not restated here. It is lifted out of
- * js/mc.js and run, so a pattern that stopped excluding the address the
- * type-ahead calls would fail this group rather than pass it.
+ * Which half of that is proven how is worth saying plainly, because the two
+ * halves are not proven the same way. The server half - a request carrying no
+ * token, or the wrong one, is refused, and refused without changing a row - is
+ * behavioural: it is driven as real requests in the endpoint groups below and,
+ * against real rows, in the database ones. This group is the browser half, and
+ * there is no JavaScript runtime here to execute that with, nor will there be.
+ * Every assertion below therefore reads the file. What it can say is what the
+ * source holds and in what order - which call the prefilter's body makes, which
+ * answer it consults before making it, which URL and method each request names.
+ * What it cannot say is what a browser does when it runs any of that.
+ *
+ * Reading is narrowed to the construct in question for the same reason the PHP
+ * checks above narrow theirs: the prefilter's own body, and the object literal
+ * of each call, so a fact about one of them cannot be satisfied by something
+ * else in the file.
  */
 
 t_group('the csrf token reaches the browser and stays inside this site', function () {
