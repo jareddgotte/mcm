@@ -3133,51 +3133,31 @@ t_group('movie endpoints refuse before the database', function () {
 	mcm_server_stop($server);
 });
 
-t_group('movie endpoint guard source checks of last resort', function () {
-	// Guard order and scope are proven behaviourally by 'movie ownership over a
-	// real database': a missing or misplaced guard, a move missing either end,
-	// an unscoped duplicate check, a GET that still mutates and a POST that
-	// mutates without a CSRF token all show up there, because a refused request
-	// is snapshotted before and after and a permitted one is checked against
-	// what it actually wrote. What is left here is only what that group cannot
+t_group('import_list.php source checks of last resort', function () {
+	// Guard order and scope for every endpoint, including import_list.php's own
+	// ownership guard, are proven behaviourally by 'movie ownership over a real
+	// database': a missing or misplaced guard, a move missing either end, an
+	// unscoped duplicate check, a GET that still mutates and a POST that mutates
+	// without a CSRF token all show up there, because a refused request is
+	// snapshotted before and after and a permitted one is checked against what
+	// it actually wrote. What is left here is only what that group cannot
 	// reach: import_list.php's own call out to TMDb, which no case in this
-	// suite makes, so nothing behavioural can show that ownership was settled
-	// before it or that its duplicate check stayed scoped to one account.
-	$endpoints = array('add_movie.php', 'delete_movie.php', 'move.php', 'import_list.php');
-
-	foreach ($endpoints as $page) {
-		$file = MCM_REPO_ROOT . '/' . $page;
-
-		$loads = false;
-		foreach (mcm_include_statements($file) as $statement) {
-			foreach ($statement['literals'] as $literal) {
-				if (substr($literal, -10) === 'guards.php') {
-					$loads = $loads || ($statement['once'] && $statement['anchored']);
-				}
-			}
-		}
-		t_ok($loads, $page . ' loads the guards once, by a path anchored to its own directory');
-	}
-
+	// suite makes, so nothing behavioural can show where its ownership check
+	// sits relative to that call, or how its duplicate query scopes its WHERE
+	// clause. These read the source because the path cannot be executed here,
+	// and reading the source proves what the text says, not what a request does.
 	$import_source = mcm_flat_source(MCM_REPO_ROOT . '/import_list.php');
 	$ownership     = strpos($import_source, 'mcm_require_list_owner');
 	$tmdb_call     = strpos($import_source, 'getList');
 
 	t_ok($ownership !== false && $tmdb_call !== false, 'import_list.php has both an ownership check and a call to TMDb');
-	t_ok($ownership < $tmdb_call, 'import_list.php settles ownership before it calls TMDb');
+	t_ok($ownership < $tmdb_call, 'the ownership check appears before the call to TMDb in import_list.php\'s source');
 
-	// Duplicate detection is a question about one user's collection. Without the
-	// owner in the WHERE clause, import_list.php was asking whether anybody at
-	// all had the film, and silently skipped every film another account owned.
-	foreach (array('add_movie.php', 'import_list.php') as $page) {
-		$source = mcm_flat_source(MCM_REPO_ROOT . '/' . $page);
-
-		t_contains(
-			'JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id',
-			$source,
-			$page . ' looks for a duplicate in this user\'s lists only'
-		);
-	}
+	t_contains(
+		'JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id',
+		$import_source,
+		'import_list.php\'s duplicate lookup query text is scoped to one account'
+	);
 });
 
 /*
