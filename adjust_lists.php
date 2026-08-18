@@ -4,14 +4,17 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Reordering is a write like any other, and the order belongs to one account.
+// Reordering is a write like any other: it needs the method, the session and the
+// token, and the order it changes belongs to one account.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 $user_id = mcm_current_user_id();
 
 // Kill the script if someone got here improperly
-$stop_state_json = (isset($_POST['stop_state'])) ? $_POST['stop_state'] : ((isset($_GET['stop_state'])) ? $_GET['stop_state'] : '');
-$start_pos = (isset($_POST['start_pos'])) ? $_POST['start_pos'] : ((isset($_GET['start_pos'])) ? $_GET['start_pos'] : '');
-$stop_pos = (isset($_POST['stop_pos'])) ? $_POST['stop_pos'] : ((isset($_GET['stop_pos'])) ? $_GET['stop_pos'] : '');
+$stop_state_json = isset($_POST['stop_state']) ? $_POST['stop_state'] : '';
+$start_pos = isset($_POST['start_pos']) ? $_POST['start_pos'] : '';
+$stop_pos = isset($_POST['stop_pos']) ? $_POST['stop_pos'] : '';
 
 // What the page sends is a JSON array of list identifiers and the two positions
 // that bound the part of it that moved. None of it is typed by anybody, so a

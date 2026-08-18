@@ -5,12 +5,15 @@ require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
 // A deletion cannot be undone, so this is the endpoint that least wants to run
-// for a visitor who is not signed in.
+// for a visitor who is not signed in, or for a request that visitor did not make
+// deliberately from a page of this site's.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 $user_id = mcm_current_user_id();
 
 // Kill the script if someone got here improperly
-$movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
+$movie_list_id = isset($_POST['movie_list_id']) ? $_POST['movie_list_id'] : '';
 
 //echo "trying to connect to db<br>\n";
 $db_connection = mcm_db_or_fail('delete_list');

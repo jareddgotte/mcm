@@ -4,14 +4,17 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Renaming somebody else's list is not a thing this endpoint does. Signed in
-// first, so an anonymous request is refused before anything is read.
+// Renaming somebody else's list is not a thing this endpoint does. The method,
+// the session and the token come first, so a request that fails any of them is
+// refused before anything is read.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 $user_id = mcm_current_user_id();
 
 // Kill the script if someone got here improperly
-$movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
-$list_name = (isset($_POST['list_name'])) ? $_POST['list_name'] : ((isset($_GET['list_name'])) ? $_GET['list_name'] : '');
+$movie_list_id = isset($_POST['movie_list_id']) ? $_POST['movie_list_id'] : '';
+$list_name = isset($_POST['list_name']) ? $_POST['list_name'] : '';
 
 // Bounded validation of the submitted name, before anything is stored. It only
 // rejects; it never rewrites what was typed, and the name already on this list

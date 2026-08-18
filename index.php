@@ -46,6 +46,10 @@ $(document).ready(function(){
 */
 
 require_once(__DIR__ . '/inc/bootstrap.php');
+// Not for a guard: this page guards nothing. The signed-in view hands
+// mcm_csrf_token() to the browser, which is what lets the requests that page
+// makes carry a token the mutation endpoints will accept.
+require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
 $login = new Login();

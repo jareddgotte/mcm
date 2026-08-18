@@ -157,6 +157,13 @@ $script = "
 //console.log('" . ""/*serialize($_SESSION)*/ . "'); // debug my session variable
 
 var user_id = " . mcm_js($_SESSION['user_id']) . "
+// The session's CSRF token, minted on the first page load of a session that has
+// none. js/mc.js puts it on every request this page makes back to this site, and
+// on no request that leaves it. It is a credential, so it goes into the page and
+// never into a URL: nothing here builds a link or a redirect out of it, and the
+// only response carrying it is this one, which the session's own cache headers
+// already keep out of any shared cache.
+var csrf_token = " . mcm_js(mcm_csrf_token()) . "
 var db = " . $db_var . "
 var base_url = " . mcm_js($base_url) . "
 var poster_size_big = " . mcm_js($poster_size) . "

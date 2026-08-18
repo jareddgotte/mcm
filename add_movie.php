@@ -1,22 +1,27 @@
 <?php
 
 require_once(__DIR__ . '/inc/bootstrap.php');
-// Two questions have to be answered before this page writes anything: is
-// anybody signed in, and is the list they named theirs. Both are asked with the
+// Four questions have to be answered before this page writes anything: is this
+// a POST, is anybody signed in, did the request come from a page this site
+// handed out, and is the list they named theirs. All four are asked with the
 // shared guards, so a refusal here is the same refusal every other endpoint
-// gives, and it is given before any query runs.
+// gives, and every one of them is given before any query runs.
 require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
-// Nobody signed in has no collection to add to.
+// A POST from a signed-in visitor, carrying this session's own token. Nobody
+// signed in has a collection to add to, and a page this site did not hand out
+// does not get to add to anybody's.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 
-$movie_list_id = (isset($_POST['movie_list_id'])) ? $_POST['movie_list_id'] : ((isset($_GET['movie_list_id'])) ? $_GET['movie_list_id'] : '');
-$tmdb_movie_id = (isset($_POST['tmdb_movie_id'])) ? $_POST['tmdb_movie_id'] : ((isset($_GET['tmdb_movie_id'])) ? $_GET['tmdb_movie_id'] : '');
-$tmdb_title = (isset($_POST['tmdb_title'])) ? $_POST['tmdb_title'] : ((isset($_GET['tmdb_title'])) ? $_GET['tmdb_title'] : '');
-$tmdb_original_title = (isset($_POST['tmdb_original_title'])) ? $_POST['tmdb_original_title'] : ((isset($_GET['tmdb_original_title'])) ? $_GET['tmdb_original_title'] : '');
-$tmdb_poster_path = (isset($_POST['tmdb_poster_path'])) ? $_POST['tmdb_poster_path'] : ((isset($_GET['tmdb_poster_path'])) ? $_GET['tmdb_poster_path'] : '');
-$tmdb_release_date = (isset($_POST['tmdb_release_date'])) ? $_POST['tmdb_release_date'] : ((isset($_GET['tmdb_release_date'])) ? $_GET['tmdb_release_date'] : '');
+$movie_list_id = isset($_POST['movie_list_id']) ? $_POST['movie_list_id'] : '';
+$tmdb_movie_id = isset($_POST['tmdb_movie_id']) ? $_POST['tmdb_movie_id'] : '';
+$tmdb_title = isset($_POST['tmdb_title']) ? $_POST['tmdb_title'] : '';
+$tmdb_original_title = isset($_POST['tmdb_original_title']) ? $_POST['tmdb_original_title'] : '';
+$tmdb_poster_path = isset($_POST['tmdb_poster_path']) ? $_POST['tmdb_poster_path'] : '';
+$tmdb_release_date = isset($_POST['tmdb_release_date']) ? $_POST['tmdb_release_date'] : '';
 
 //printf("c[%s] m[%s]\n", $current_list, $movie_id);
 //echo "trying to connect to db<br>\n";

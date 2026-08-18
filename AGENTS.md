@@ -57,6 +57,13 @@ the application. Setup is documented in `README.md`.
   and the body as its fourth and fifth arguments. The ownership cases build
   their fixture table in SQLite in memory, and skip where the runtime has no
   SQLite driver, so the suite still needs no database.
+- A signed-in browser is `mcm_seed_signed_in()` plus `mcm_session_headers()`:
+  the session gets a CSRF token derived from its own identifier, and the request
+  carries that session's cookie and token together. The session key is a literal
+  in `tests/run.php` because the suite must not load the application to describe
+  it; 'guard csrf tokens' is where that literal is checked against what a page
+  actually sees, so a wrong key would fail there rather than quietly leave every
+  other case driving a session with no token.
 - The suite has no browser and does not want one. `tests/browser/xss.html` is
   opened by hand instead: it renders a hostile list name, movie title, poster
   path and movie identifier through the real scripts and reports what the
@@ -166,31 +173,50 @@ the application. Setup is documented in `README.md`.
   or a list position is allowed to be, and the fixed JSON refusal bodies. Its
   CSRF token comes from `mcm_random_token()` and is checked with
   `mcm_hash_equals()`, both from `inc/security.php`; the guards declare no
-  primitives of their own. Adoption is deliberate and endpoint by endpoint:
-  `mcm_guarded_entry_points()` in `tests/entrypoints.php` is the written-down
-  list of who has adopted them, and a page that starts loading them without
-  being added there fails the suite.
-- The list mutation endpoints - `create_list.php`, `rename_list.php`,
-  `delete_list.php`, `adjust_lists.php`, `share_lists.php` - have adopted them,
-  as have the movie ones below. Each takes the owner from the session and never
-  from the request, and each write names that owner in its own `WHERE` clause:
-  the guard refuses the request, and the clause is what leaves the statement
-  unable to reach somebody else's row if a guard were ever dropped. A request
-  naming several lists checks all of them before writing any, so a range that
-  reaches one list belonging to somebody else moves none of them. POST-only and
-  CSRF are the guards these have *not* adopted yet; that is its own issue.
-- The movie mutation endpoints - `add_movie.php`, `delete_movie.php`,
-  `move.php`, `import_list.php` - are guarded in one fixed order, and the order
-  is the point: `mcm_require_login()` before the connection is opened, then
-  `mcm_require_list_owner()` before the first query is prepared. Anything later
-  than that has already written something, because `master_movie_list` is shared
-  between every account and an add writes to it before it writes to the list.
-  `move.php` checks both ends, and `import_list.php` settles ownership before it
-  calls TMDb, so a refusal costs no network request. Duplicate detection is
-  scoped to the asking user in both `add_movie.php` and `import_list.php`.
-  POST-only and CSRF are deliberately not applied there yet; the suite proves
-  it behaviourally - an owner's GET still mutates and an owner's POST without a
-  CSRF token still mutates - so that the change which adds them is visible.
+  primitives of their own. `mcm_guarded_entry_points()` in
+  `tests/entrypoints.php` is the written-down list of who loads them, and a page
+  that starts loading them without being added there fails the suite;
+  `mcm_unguarded_guard_users()` beside it names the pages that load them and
+  guard nothing, which is `index.php` and its need for `mcm_csrf_token()`.
+- Every mutation endpoint - `create_list.php`, `rename_list.php`,
+  `delete_list.php`, `adjust_lists.php`, `share_lists.php`, `add_movie.php`,
+  `delete_movie.php`, `move.php`, `import_list.php` - asks all four, and the
+  order is the point: `mcm_require_post()`, `mcm_require_login()` and
+  `mcm_require_csrf()` need only the session, so a request they refuse has
+  opened no connection and written nothing; `mcm_require_list_owner()` needs a
+  database and so follows it. Anything later than that has already written
+  something, because `master_movie_list` is shared between every account and an
+  add writes to it before it writes to the list. `move.php` checks both ends,
+  and `import_list.php` settles ownership before it calls TMDb, so a refusal
+  costs no network request. Duplicate detection is scoped to the asking user in
+  both `add_movie.php` and `import_list.php`.
+- Each of them takes the owner from the session and never from the request, and
+  each write names that owner in its own `WHERE` clause; each also reads its
+  values from `$_POST` alone. Both are second layers: the guard is what refuses
+  the request, and the clause and the missing query-string fallback are what
+  leave the page unable to reach another account's row, or to act on a GET, if a
+  guard were ever dropped. A request naming several lists checks all of them
+  before writing any, so a range that reaches one list belonging to somebody
+  else moves none of them.
+- The token is minted on demand by `mcm_csrf_token()` and lasts as long as the
+  session, so a second tab keeps working and a session signed in before the
+  check existed gets a token on its next page load rather than being turned
+  away. `inc/views/logged_in.php` is the only page that hands one out, through
+  `mcm_js()` into its script block - never into a URL - and the suite derives
+  that list from the source, so a new page that started exposing it would have
+  to answer for it. The public sharing page is not authenticated, asks for no
+  token, and must stay that way.
+- `js/mc.js` attaches it in one `$.ajaxPrefilter`, as the `X-CSRF-Token` header
+  that `MCM_CSRF_HEADER` reads. Whether a request leaves this site is jQuery's
+  own answer - it resolves the URL and compares scheme, host and port before any
+  prefilter runs - so the type-ahead's search of TMDb carries no token. Do not
+  re-derive that from the URL here: a pattern in a browser script is also the
+  one construct `mcm_js_markers()` cannot read.
+- The php-login flows - sign-in, sign-out, registration, password reset - are a
+  separate surface. They are handled by the `Login` and `Registration` classes
+  rather than the guards, and neither the token nor POST-only has been extended
+  to them; `index.php?logout` is still a GET on purpose, because every link to
+  it already in a browser would otherwise stop working.
 - A refusal answers with a status from `mcm_json_error_catalogue()` and that
   status's fixed body, so two different reasons sharing a status cannot be told
   apart from outside; the reason goes to the log through `mcm_log()`. Tokens are

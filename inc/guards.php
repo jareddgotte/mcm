@@ -19,12 +19,23 @@
  * Nothing here decides anything on its own. The file only declares functions:
  * adopting them, endpoint by endpoint, is deliberately separate work, so that
  * adding the helpers did not itself change what any request did on landing.
- * The list mutation endpoints and the movie mutation endpoints - add_movie.php,
- * delete_movie.php, move.php, import_list.php - have adopted
- * mcm_require_login() and mcm_require_list_owner(); POST-only and CSRF
- * enforcement are still unadopted everywhere. mcm_guarded_entry_points() in
- * tests/entrypoints.php is the written-down list, and the suite fails a page
- * that starts loading this file without being added there.
+ * Every mutation endpoint - create_list.php, rename_list.php, delete_list.php,
+ * adjust_lists.php, share_lists.php, add_movie.php, delete_movie.php, move.php
+ * and import_list.php - has now adopted the first three, in that numbered
+ * order, and the fourth wherever there is an existing list to own.
+ * create_list.php is the one that has no fourth question: it makes a list
+ * rather than changing one.
+ * index.php loads this file too, for one reason that is not a guard at all: the
+ * signed-in page hands mcm_csrf_token() to the browser so that the requests it
+ * makes can carry it. mcm_guarded_entry_points() in tests/entrypoints.php is
+ * the written-down list, and the suite fails a page that starts loading this
+ * file without being added there.
+ *
+ * The order those first three run in is the whole of what they cost. A method
+ * is a property of the request, the session answers the next two, and none of
+ * them opens a connection: a refused request has therefore reached no query and
+ * changed no row, whatever the endpoint would have written. Only the fourth
+ * needs a database, which is why it is the one that comes after the connection.
  *
  * Two rules hold throughout:
  *

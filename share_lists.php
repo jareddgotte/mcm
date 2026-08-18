@@ -5,13 +5,16 @@ require_once(__DIR__ . '/inc/guards.php');
 require_once('inc/php-login.php');
 
 // Whether a list is readable by anybody with its link is the one setting on a
-// list that matters to somebody other than its owner. Only the owner sets it.
+// list that matters to somebody other than its owner. Only the owner sets it,
+// and only from a page this site handed out.
+mcm_require_post();
 mcm_require_login();
+mcm_require_csrf();
 $user_id = mcm_current_user_id();
 
 // Kill the script if someone got here improperly
-$changed_lists_json = (isset($_POST['changed_lists'])) ? $_POST['changed_lists'] : ((isset($_GET['changed_lists'])) ? $_GET['changed_lists'] : '');
-$share_vals_json = (isset($_POST['share_vals'])) ? $_POST['share_vals'] : ((isset($_GET['share_vals'])) ? $_GET['share_vals'] : '');
+$changed_lists_json = isset($_POST['changed_lists']) ? $_POST['changed_lists'] : '';
+$share_vals_json = isset($_POST['share_vals']) ? $_POST['share_vals'] : '';
 
 // Two JSON arrays that line up position for position: the lists whose setting
 // changed, and what each one changed to. Neither is typed by anybody, so a

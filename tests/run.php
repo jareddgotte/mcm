@@ -307,6 +307,52 @@ function mcm_seed_session(array $fixture, $id, array $data)
 	file_put_contents($fixture['sessions'] . '/sess_' . $id, $encoded);
 }
 
+/**
+ * The CSRF token a seeded session holds, derived from its own identifier.
+ *
+ * Deriving it means a case names one value - the session - and still knows the
+ * token, so a request's cookie and its token can never drift apart by accident.
+ * The identifiers here are 32 hex characters and the column that would hold a
+ * token is 64, so doubling one gives a token of exactly the right shape.
+ *
+ * @param string $id
+ * @return string
+ */
+function mcm_session_token($id)
+{
+	return substr(str_repeat($id, 4), 0, 64);
+}
+
+/**
+ * A signed-in session, seeded with a CSRF token of its own.
+ *
+ * The session key is written out here rather than read from inc/guards.php,
+ * because the suite must not load the application to describe it. That the
+ * literal is the right one is not taken on trust: 'guard csrf tokens' seeds a
+ * session this way and then asks a page what token it sees.
+ *
+ * @param array  $fixture
+ * @param string $id
+ * @param array  $data the rest of the session, as mcm_seed_session() takes it
+ */
+function mcm_seed_signed_in(array $fixture, $id, array $data)
+{
+	$data['mcm_csrf_token'] = mcm_session_token($id);
+	mcm_seed_session($fixture, $id, $data);
+}
+
+/**
+ * The headers a request from a seeded signed-in session's browser carries: the
+ * session cookie, and the session's token in the header js/mc.js sends it in.
+ *
+ * @param string $id
+ * @return array
+ */
+function mcm_session_headers($id)
+{
+	return array('Cookie: PHPSESSID=' . $id, 'X-CSRF-Token: ' . mcm_session_token($id));
+}
+
 /** The session identifiers the fixture currently has files for, sorted. */
 function mcm_session_files(array $fixture)
 {
