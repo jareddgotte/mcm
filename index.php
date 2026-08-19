@@ -10,8 +10,8 @@
 // This file used to carry a worked example of the search it wanted: a browser
 // calling the movie database directly, with this site's credential written into
 // the script. That is the thing issue #36 removed, so the example is gone with
-// it. Searching goes through tmdb.php, which is the only place the credential
-// is read; see the TMDb access section of AGENTS.md.
+// it. Searching goes through tmdb.php, which reaches the credential only via
+// inc/tmdb.php; see the TMDb access section of AGENTS.md.
 
 /* 
 	****  Purpose
