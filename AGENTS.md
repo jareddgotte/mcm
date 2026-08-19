@@ -89,9 +89,13 @@ the application. Setup is documented in `README.md`.
   Ownership is a question about rows, so a refusal is asserted twice: what the
   client was told, and a before/after snapshot of every table
   (`mcm_db_movies_snapshot()` and friends) proving the refusal wrote nothing.
-  What no case covers is a successful import - that path calls TMDb over the
-  network, which the suite does not do; its refusals happen earlier and are
-  covered.
+  It runs a TMDb stub on a second server because `add_movie.php` looks a film
+  up; a fixture there without `MCM_TMDB_BASE_URL` would reach the real TMDb.
+  `add_movie resolves its own metadata over a real database` is where what gets
+  stored is taken apart - a fabricated title served and stored nowhere, a
+  refusal costing no outbound call, the update path, and an outage. What no case
+  covers is a successful import - that path calls TMDb over the network, which
+  the suite does not do; its refusals happen earlier and are covered.
 - Server lifecycle is the sharp edge, because its failure mode is a hang rather
   than a failure. `proc_close()` waits for the child, so calling it on a server
   that ignored SIGTERM never returns; `mcm_db_stop_server()` therefore signals,
@@ -156,6 +160,14 @@ the application. Setup is documented in `README.md`.
 - Escaping is rendering only. Stored values keep the exact bytes that were
   submitted, and `mcm_list_name_error()` rejects a bad list name rather than
   rewriting it, so a name that already contains markup keeps working.
+- What a browser script may name is read off its string literals, not its raw
+  text: `mcm_js_absolute_urls()` fails a script that names any host of its own,
+  `mcm_js_object_property()` reads one object-valued property, and
+  `mcm_js_ajax_calls()` reports each call's URL, method and the field names it
+  sends. That is how "the search is same-origin and the add names only two
+  fields" is asserted without a browser; the server half of the same claim is
+  the database group above, which is what actually proves nothing else can be
+  stored.
 - The browser has the same duty for what it renders after the page loads, and
   `js/dom.js` is where it discharges it: the page scripts build elements and
   assign a value as text or as an attribute instead of concatenating it into
@@ -210,8 +222,10 @@ the application. Setup is documented in `README.md`.
 - `js/mc.js` attaches it in one `$.ajaxPrefilter`, as the `X-CSRF-Token` header
   that `MCM_CSRF_HEADER` reads. Whether a request leaves this site is jQuery's
   own answer - it resolves the URL and compares scheme, host and port before any
-  prefilter runs - so the type-ahead's search of TMDb carries no token. Do not
-  re-derive that from the URL here: a pattern in a browser script is also the
+  prefilter runs - and the prefilter reads that answer rather than the URL. No
+  request the page makes leaves this site any more, so nothing depends on it
+  today; it stays because the next request somebody adds is what it is for. Do
+  not re-derive it from the URL here: a pattern in a browser script is also the
   one construct `mcm_js_markers()` cannot read.
 - The php-login flows - sign-in, sign-out, registration, password reset - are a
   separate surface. They are handled by the `Login` and `Registration` classes
@@ -231,8 +245,8 @@ the application. Setup is documented in `README.md`.
 
 - `inc/tmdb.php` is the first-party, backend-only TMDb client and the only
   place a TMDb credential is read. It is loaded on demand rather than by the
-  bootstrap, and nothing loads it yet - the proxy entry point that will is a
-  later issue. The credential is `TMDB_READ_ACCESS_TOKEN` and it only ever
+  bootstrap, through `inc/tmdb_proxy.php`, which `tmdb.php` and `add_movie.php`
+  both require. The credential is `TMDB_READ_ACCESS_TOKEN` and it only ever
   appears in an `Authorization: Bearer` header on a handle built and closed
   inside one call: never in a URL, a session, a page, a script or the log.
 - `mcm_tmdb_transport_options()` is deliberately a pure function returning the
@@ -297,12 +311,29 @@ the application. Setup is documented in `README.md`.
   a refusal where an answer was expected is a failing assertion instead of a
   TypeError; and catch `Throwable`, not `Exception`, in a group that has to stop
   a server on the way out.
+- Two things call the proxy. `js/mc.js` searches it, same-origin and with the
+  operation named in the URL, so no browser-served script names a TMDb host or
+  a key and `git grep -nE "api_key|themoviedb" -- js/` is empty.
+  `add_movie.php` calls `mcm_tmdb_resolve()`, which is `mcm_tmdb_plan()` plus
+  `mcm_tmdb_run()` in this process: the same operation, validation and
+  projection the entry point serves, without a request to itself. Add a caller
+  that way rather than by building a second path to `mcm_tmdb_get()`.
+  `mcm_tmdb_resolve()` asks nobody who is calling; the guards have already
+  settled that, which is the only reason a page may reach it.
+- `add_movie.php` takes a list identifier and a film identifier and nothing
+  else. The four descriptive fields a request used to carry are read nowhere,
+  so they are ignored rather than refused - a browser holding a cached copy of
+  the old script keeps working and still cannot describe a film - and what is
+  stored is the movie projection, each value through `mcm_column_text()` to the
+  width of the column that holds it. The lookup happens after
+  `mcm_require_list_owner()`, so a refusal costs no outbound request, and a film
+  the endpoint cannot resolve is answered `3` and stores nothing; `1` and `2`
+  still mean inserted and duplicate.
 - The old vendored wrapper in `inc/classes/TMDb.inc` is still what
   `dialog.php`, `import_list.php` and the two views call, and it still holds
   `TMDB_API_KEY`; it is built per request now rather than kept in `$_SESSION`.
-  Nothing in the site calls the proxy yet: search, the trailer modal and list
-  import are moved onto it by later issues, and the wrapper and the dead
-  auth-session path are removed after that.
+  The trailer modal and list import move onto the proxy by later issues, and the
+  wrapper and the dead auth-session path are removed after that.
 
 ## Database access
 

@@ -37,8 +37,11 @@ require_once(__DIR__ . '/inc/tmdb_proxy.php');
  * nothing here changes a row, so there is nothing for a CSRF token to protect
  * and no reason to turn away a page that has none.
  *
- * Nothing in this site calls it yet. Movie search, the trailer modal and list
- * import are moved onto it by issues #36, #37 and #38.
+ * The add-a-movie type-ahead searches through this door, which is what took the
+ * TMDb credential out of the browser. add_movie.php needs the same movie
+ * operation and does not come this way for it: it calls mcm_tmdb_resolve() in
+ * its own process, so the site never makes a request to itself. The trailer
+ * modal and list import are moved onto the proxy by issues #37 and #38.
  */
 
 // The request's own fields, from the body of a POST or the query string of a

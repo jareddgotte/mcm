@@ -50,9 +50,11 @@
  * about never. The cache holds the projection, not the upstream body, so even
  * the file on disk carries nothing that could not be served.
  *
- * Nothing in production calls any of this yet: search, the trailer modal and
- * list import are repointed at it by later issues. Loading this file changes no
- * existing request.
+ * Two things call it. The add-a-movie type-ahead in js/mc.js asks for the search
+ * operation over HTTP, which is what took the credential out of the browser; and
+ * add_movie.php calls mcm_tmdb_resolve() below, which runs one operation in this
+ * process rather than making a request to this server from itself. The trailer
+ * modal and list import are repointed at it by later issues.
  */
 
 // The client, the configuration and mcm_log() come from inc/tmdb.php and the

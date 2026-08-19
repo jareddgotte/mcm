@@ -3153,6 +3153,35 @@ t_group('list name validation', function () {
  * ---------------------------------------------------------------------------
  */
 
+t_group('a stored value fits the column that holds it', function () {
+	// mcm_column_text() is the one thing that happens to a value this server
+	// looked up before it is written to a varchar(255). A cut by the byte would
+	// pass every other case in this suite - the stored row would still be
+	// shorter than the column - and would still leave a title split through the
+	// middle of a character, so this is where that is asked.
+	$fixture = mcm_fixture('column-text');
+	$report  = mcm_report(mcm_cli($fixture, 'column_text.php')['stdout']);
+	$at      = function ($key) use ($report) {
+		return isset($report[$key]) ? $report[$key] : '(absent)';
+	};
+
+	t_same('10', $at('short_bytes'), 'a value that already fits is left alone');
+	t_same('255', $at('exactly_bytes'), 'a value of exactly the column width is left alone');
+	t_same('255', $at('longer_bytes'), 'a longer value is cut to the column width');
+	t_same('255', $at('longer_chars'), 'and it is 255 characters that are kept');
+
+	// The two that say the cut is by the character rather than by the byte.
+	t_same('255', $at('longer_mb_chars'), 'a long multi-byte value keeps 255 characters');
+	t_same('510', $at('longer_mb_bytes'), 'which is more than 255 bytes, and that is the point');
+	t_same('yes', $at('longer_mb_valid'), 'and what is kept is still valid UTF-8');
+	t_same('256', $at('boundary_mb_bytes'), 'a value inside the limit by character is not cut for being outside it by byte');
+	t_same('yes', $at('boundary_mb_valid'), 'so its last character survives whole');
+
+	// And the one that cannot be counted by character is still bounded.
+	t_same('255', $at('invalid_utf8_bytes'), 'a value that is not valid UTF-8 is cut by the byte instead');
+	t_same('0', $at('not_a_string_bytes'), 'a value that is not text at all becomes an empty one');
+});
+
 t_group('security headers', function () {
 	/* The default fixture, over the wire ---------------------------------------- */
 
