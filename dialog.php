@@ -42,32 +42,7 @@ $video_rows = (!empty($videos_result['ok']) && isset($videos_result['data']['res
 	: array();
 
 $yt_trailers = mcm_dialog_usable_trailers($video_rows);
-
-if (count($yt_trailers) > 0) {
-	$trailer_html = '<div class="panel-group" id="accordion">';
-	foreach ($yt_trailers as $k => $v) {
-		$tmp = '
-			<div class="panel panel-default">
-				<div class="panel-heading">
-					<h3 class="panel-title">
-						<a data-toggle="collapse" data-parent="#accordion" href="#collapse%s"><strong>%s</strong>, %s</a>
-					</h3>
-				</div>
-				<div id="collapse%s" class="panel-collapse collapse%s">
-					<div class="panel-body">
-						<img class="trailer-scale" src="img/trailer-scale.png" alt="">
-						<iframe width="100%%" height="100%%" src="//www.youtube.com/embed/%s?autoplay=0&rel=0" frameborder="0" allowfullscreen></iframe>
-					</div>
-				</div>
-			</div>
-		';
-		// Everything below the format string comes from TMDb: the labels are text,
-		// and 'key' is already the bare YouTube video id.
-		$trailer_html .= sprintf($tmp, (int) $k, mcm_html($v['type']), mcm_html($v['name']), (int) $k, ($k == 0) ? ' in' : '', mcm_url($v['key']));
-	}
-	$trailer_html .= '</div>';
-}
-else $trailer_html = '<div class="alert alert-warning"><strong>No trailer available.</strong></div>';
+$trailer_html = mcm_dialog_trailer_html($yt_trailers);
 
 // $genress is markup once it leaves this loop, so each name is escaped as it
 // goes in and the separator stays a literal separator.

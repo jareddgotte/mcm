@@ -37,3 +37,48 @@ function mcm_dialog_usable_trailers(array $video_rows)
 
 	return $usable;
 }
+
+/**
+ * The trailer dialog's markup for one movie: an accordion of usable trailers,
+ * or the friendly empty state.
+ *
+ * A pure function of mcm_dialog_usable_trailers()'s own output, so dialog.php
+ * only has to call the two of them in sequence and the suite can drive this
+ * one directly with hand-built rows - including a hostile name and key - to
+ * prove the exact panel, iframe and empty-state markup without a server or a
+ * browser.
+ *
+ * @param array $usable_trailers as mcm_dialog_usable_trailers() returns
+ * @return string HTML, an accordion of panels or the "No trailer" alert
+ */
+function mcm_dialog_trailer_html(array $usable_trailers)
+{
+	if (count($usable_trailers) === 0) {
+		return '<div class="alert alert-warning"><strong>No trailer available.</strong></div>';
+	}
+
+	$html = '<div class="panel-group" id="accordion">';
+	foreach ($usable_trailers as $k => $v) {
+		$tmp = '
+			<div class="panel panel-default">
+				<div class="panel-heading">
+					<h3 class="panel-title">
+						<a data-toggle="collapse" data-parent="#accordion" href="#collapse%s"><strong>%s</strong>, %s</a>
+					</h3>
+				</div>
+				<div id="collapse%s" class="panel-collapse collapse%s">
+					<div class="panel-body">
+						<img class="trailer-scale" src="img/trailer-scale.png" alt="">
+						<iframe width="100%%" height="100%%" src="//www.youtube.com/embed/%s?autoplay=0&rel=0" frameborder="0" allowfullscreen></iframe>
+					</div>
+				</div>
+			</div>
+		';
+		// Everything below the format string comes from TMDb: the labels are text,
+		// and 'key' is already the bare YouTube video id.
+		$html .= sprintf($tmp, (int) $k, mcm_html($v['type']), mcm_html($v['name']), (int) $k, ($k == 0) ? ' in' : '', mcm_url($v['key']));
+	}
+	$html .= '</div>';
+
+	return $html;
+}

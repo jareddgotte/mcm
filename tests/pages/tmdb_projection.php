@@ -220,3 +220,44 @@ mcm_projection('dialog_trailers_none_usable', mcm_dialog_usable_trailers(mcm_tmd
 		array('id' => '5', 'key' => 'behind1', 'name' => 'Behind the Scenes', 'site' => 'YouTube', 'type' => 'Featurette', 'size' => 1080, 'official' => false),
 	),
 ))['results']));
+
+/*
+ * The dialog's actual trailer markup (issue #37 follow-up): the selection
+ * tests above prove which rows are usable, not what a browser is sent. These
+ * feed mcm_dialog_trailer_html() the same way dialog.php does - a selection
+ * straight out of mcm_dialog_usable_trailers() - so the suite reads the exact
+ * accordion, iframe and empty-state HTML rather than only the rows behind it.
+ */
+
+// The friendly empty state, verbatim: what a movie with no usable trailer
+// renders instead of a warning, a fatal error or broken markup.
+mcm_projection('dialog_trailer_html_empty', mcm_dialog_trailer_html(array()));
+
+// Two usable trailers and a teaser, already ranked by mcm_dialog_usable_trailers():
+// the higher-resolution trailer first, then the lower one, then the teaser last.
+mcm_projection('dialog_trailer_html_usable', mcm_dialog_trailer_html(mcm_dialog_usable_trailers(mcm_tmdb_project_videos(array(
+	'id'      => 550,
+	'results' => array(
+		array('id' => '1', 'key' => 'teaser1', 'name' => 'Teaser', 'site' => 'YouTube', 'type' => 'Teaser', 'size' => 1080, 'official' => true),
+		array('id' => '2', 'key' => 'trailer720', 'name' => 'Trailer 720p', 'site' => 'YouTube', 'type' => 'Trailer', 'size' => 720, 'official' => true),
+		array('id' => '3', 'key' => 'trailer1080', 'name' => 'Trailer 1080p', 'site' => 'YouTube', 'type' => 'Trailer', 'size' => 1080, 'official' => true),
+	),
+))['results'])));
+
+// A name that is markup and a key shaped like a URL-breaking attribute value,
+// projected and then rendered: proof the renderer escapes what the projector
+// merely passed through, exactly as dialog.php's own comment says it must.
+mcm_projection('dialog_trailer_html_hostile', mcm_dialog_trailer_html(mcm_dialog_usable_trailers(mcm_tmdb_project_videos(array(
+	'id'      => 550,
+	'results' => array(
+		array(
+			'id'       => '1',
+			'key'      => 'abc"><script>alert(1)</script>',
+			'name'     => '<script>alert(1)</script>',
+			'site'     => 'YouTube',
+			'type'     => 'Trailer',
+			'size'     => 1080,
+			'official' => true,
+		),
+	),
+))['results'])));
