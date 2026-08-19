@@ -962,6 +962,42 @@ function mcm_tmdb_run(array $plan)
 	return array('ok' => true, 'data' => $data);
 }
 
+/**
+ * Run one operation in this process and hand the answer back, rather than
+ * answering a request with it.
+ *
+ * tmdb.php is one caller of this policy and it is not the only one there can
+ * be. A page that has already settled who is asking - add_movie.php, once the
+ * guards have told it the list is the caller's - needs the same operation, the
+ * same validation of its values and the same projection, and must not get them
+ * by building a request of its own: a second way to ask TMDb is a second way to
+ * get it wrong. This plans and runs, and nothing else. It sends no response and
+ * never exits, so what a failure looks like stays the calling page's decision.
+ *
+ * Who may ask is deliberately not asked here. mcm_tmdb_serve() settles that for
+ * a request off the wire; a page calling in has already settled it with the
+ * guards, which is the only reason it is allowed to reach this at all.
+ *
+ * @param string $operation one of the five names
+ * @param array  $values    that operation's own accepted fields
+ * @return array ok and data, or ok false with a category, a status and a message
+ */
+function mcm_tmdb_resolve($operation, array $values)
+{
+	$plan = mcm_tmdb_plan($operation, array(MCM_TMDB_OPERATION_FIELD => $operation) + $values);
+	if (empty($plan['ok'])) {
+		return array(
+			'ok'       => false,
+			'category' => 'request',
+			'status'   => 400,
+			'message'  => 'That request could not be made.',
+			'reason'   => $plan['reason'],
+		);
+	}
+
+	return mcm_tmdb_run($plan);
+}
+
 /*
  * ---------------------------------------------------------------------------
  * Answering

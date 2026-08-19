@@ -7,12 +7,15 @@
 // The header is the way it travels, not a field, so nothing has to be spliced
 // into a body that is sometimes JSON, and so it never lands in a URL.
 //
-// Which requests leave this site is the half that matters. The type-ahead
-// searches TMDb through this same jQuery, and a token is a credential: it must
-// not go anywhere but here. jQuery has already answered that question by the
-// time a prefilter runs - it resolves the URL, including a protocol-relative
-// one, and compares scheme, host and port against this page's - so this reads
-// its answer instead of picking the URL apart again and getting it subtly wrong.
+// Which requests leave this site is the half that matters, and a token is a
+// credential: it must not go anywhere but here. No request this page makes
+// leaves any more - the type-ahead's search of TMDb became a request to this
+// site's own proxy - but the rule stays, because the next request somebody adds
+// is the one it is for. jQuery has already answered the question by the time a
+// prefilter runs: it resolves the URL, including a protocol-relative one, and
+// compares scheme, host and port against this page's. Reading its answer is the
+// point - a second implementation of that rule here is a second one to get
+// subtly wrong.
 //
 // csrf_token is read when the request is made rather than when this file loads.
 // It has to be: the page defines it in an inline script that the header renders
@@ -297,10 +300,22 @@ function enableAddMovie (template) {
 	,	queryTokenizer: Bloodhound.tokenizers.whitespace
 	,	limit: 5
 	,	remote: {
-			url: 'http://api.themoviedb.org/3/search/movie?api_key=1c36628b5c5648a1e1079924b98c0925&search_type=ngram&query=%QUERY'
+			// This site, not TMDb. The search goes to the backend proxy, which
+			// holds the credential and decides what a search may be; all this
+			// page gets to say is the operation's name and what was typed.
+			// Bloodhound substitutes %QUERY, URL-encoded, and the address is
+			// relative, so it resolves to whatever origin this page came from.
+			url: 'tmdb.php?operation=search&query=%QUERY'
 		,	rateLimitWait: 1000
 		,	filter: function (data) {
-				var add_movie_map = $.map(data.results, function (v) {
+				// The proxy answers { ok, operation, data: { results: [...] } },
+				// and answers a refusal or an upstream failure with a status
+				// jQuery never calls this for at all. Anything else - a body
+				// that is not that shape - is no suggestions rather than an
+				// error, which is exactly what a search that found nothing
+				// already looks like here.
+				if (!data || !data.data || !$.isArray(data.data.results)) return []
+				var add_movie_map = $.map(data.data.results, function (v) {
 					var classed = ''
 					if (v.poster_path === null) classed = 'invisible'
 					if ($.inArray(v.id, movie_arr) >= 0) return null
@@ -338,7 +353,12 @@ function enableAddMovie (template) {
 		$.ajax({
 			type: 'POST'
 		,	url: 'add_movie.php'
-		,	data: { movie_list_id: currentList, tmdb_movie_id: o.tmdb_movie_id, tmdb_title: o.tmdb_title, tmdb_original_title: o.tmdb_original_title, tmdb_poster_path: o.tmdb_poster_path, tmdb_release_date: o.tmdb_release_date }
+			// Which list, and which film. Nothing else: what the film is
+			// called, what it looks like and when it came out are looked up by
+			// add_movie.php itself, so a title typed into a request here would
+			// not be a title anywhere. The values below are only used to
+			// update what this page is already showing.
+		,	data: { movie_list_id: currentList, tmdb_movie_id: o.tmdb_movie_id }
 		})
 		.done(function (msg) {
 			//console.log(msg) // Useful for debugging
@@ -358,6 +378,12 @@ function enableAddMovie (template) {
 					break
 				case 2:
 					displayAlert([mcmAbbr(o.tmdb_title + ' (' + o.tmdb_release_date.substr(0, 4) + ')', 'Movie'), ' already exists in your collection!'], 'warning', 10000)
+					break
+				case 3:
+					// The server could not look the film up, so it stored
+					// nothing. Bounded on purpose: what went wrong is in the
+					// server's own log and nowhere else.
+					displayAlert('The movie database could not be reached, so nothing was added.  Please try again in a moment.', 'danger', 10000)
 					break
 				default:
 					displayAlert('Something went wrong! error[' + code + ']', 'danger', 0)

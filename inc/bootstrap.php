@@ -642,6 +642,41 @@ function mcm_list_name_error($name)
 	return '';
 }
 
+/**
+ * A value cut to what the column that will hold it can take, by the character.
+ *
+ * The columns holding a film's description are varchar(255) - see
+ * .your_database.sql - and a longer value is truncated on the way in by the
+ * byte, which can cut a multi-byte character in half and leave a title no page
+ * can render. Cutting it here, by the character, is what keeps a stored value
+ * readable; a value that is not valid UTF-8 cannot be counted that way and is
+ * cut by the byte, which is no worse than what the column would have done.
+ *
+ * This is not escaping and not validation: it is the one thing that has to
+ * happen before a value this server looked up is written to a narrow column.
+ *
+ * @param mixed $value
+ * @param int   $characters the column's width
+ * @return string
+ */
+function mcm_column_text($value, $characters)
+{
+	if (!is_string($value)) {
+		return '';
+	}
+
+	// //u makes preg_match return false - not 0 - when the subject is not valid
+	// UTF-8, which is the only way to ask the question without mbstring.
+	if (preg_match('//u', $value) !== 1) {
+		return substr($value, 0, (int) $characters);
+	}
+	if (function_exists('mb_substr')) {
+		return mb_substr($value, 0, (int) $characters, 'UTF-8');
+	}
+
+	return preg_replace('/^(.{0,' . (int) $characters . '}).*$/su', '$1', $value);
+}
+
 /*
  * ---------------------------------------------------------------------------
  * Cookies and response headers
@@ -743,7 +778,11 @@ function mcm_default_content_security_policy()
 		// Poster addresses are built on a base URL TMDb returns at run time, so
 		// the host cannot be named here without breaking the day TMDb moves it.
 		"img-src 'self' data: http: https:",
-		"connect-src 'self' api.themoviedb.org",
+		// This origin and nothing else. The type-ahead used to search the movie
+		// database from the browser, which is why this line once named that
+		// host; issue #36 moved the search behind tmdb.php, so every request a
+		// page makes now goes to this site.
+		"connect-src 'self'",
 		"frame-src www.youtube.com",
 		// 'self' rather than 'none': the signed-in page still loads a Flash
 		// clipboard shim from this origin. No browser runs it any more, and the

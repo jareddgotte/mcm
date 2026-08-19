@@ -782,6 +782,10 @@ function mcm_js_ajax_calls($file)
 		$found[] = array(
 			'url'  => mcm_js_property($block, 'url'),
 			'type' => mcm_js_property($block, 'type'),
+			// The fields the call sends, by name. What a request is allowed to
+			// decide is a fact about the names, not about the values behind
+			// them, so the names are what a case reads.
+			'data' => mcm_js_property_names(mcm_js_object_property($block, 'data')),
 		);
 		$offset = $open;
 	}
@@ -801,6 +805,118 @@ function mcm_js_property($block, $name)
 	$pattern = '/(?:^|[,{\s])' . preg_quote($name, '/') . '\s*:\s*([\'"])(.*?)\1/s';
 
 	return (preg_match($pattern, $block, $match) === 1) ? $match[2] : '';
+}
+
+/**
+ * One object-valued property of a JavaScript object literal, as its body.
+ *
+ * The counterpart of mcm_js_property() for the properties that are objects
+ * rather than strings - a call's "data", a Bloodhound source's "remote" - and
+ * it brace-matches for the same reason mcm_js_ajax_calls() does, so a nested
+ * literal does not end it early. Returns '' when there is no such property, and
+ * a case reading that gets a failure rather than a quiet pass.
+ *
+ * @param string $block the literal's body, or a whole file
+ * @param string $name
+ * @return string
+ */
+function mcm_js_object_property($block, $name)
+{
+	$pattern = '/(?:^|[,{\s])' . preg_quote($name, '/') . '\s*:\s*\{/';
+	if (preg_match($pattern, $block, $match, PREG_OFFSET_CAPTURE) !== 1) {
+		return '';
+	}
+
+	$open   = $match[0][1] + strlen($match[0][0]) - 1;
+	$depth  = 0;
+	$length = strlen($block);
+	for ($cursor = $open; $cursor < $length; $cursor++) {
+		if ($block[$cursor] === '{') {
+			$depth++;
+		} elseif ($block[$cursor] === '}') {
+			$depth--;
+			if ($depth === 0) {
+				return substr($block, $open + 1, $cursor - $open - 1);
+			}
+		}
+	}
+
+	return '';
+}
+
+/**
+ * The property names one object literal declares at its own level, sorted.
+ *
+ * String literals and comments are replaced by markers first, so a colon inside
+ * a message or a URL is not read as a property, and the scan only counts a name
+ * where nothing else is open: a name inside a nested object, array or call
+ * belongs to that one and not to this.
+ *
+ * @param string $block the literal's body
+ * @return array
+ */
+function mcm_js_property_names($block)
+{
+	$scan   = mcm_js_markers($block);
+	$code   = $scan['code'];
+	$length = strlen($code);
+	$names  = array();
+	$word   = '';
+	$depth  = 0;
+
+	for ($cursor = 0; $cursor < $length; $cursor++) {
+		$char = $code[$cursor];
+		if ($char === '{' || $char === '[' || $char === '(') {
+			$depth++;
+			$word = '';
+		} elseif ($char === '}' || $char === ']' || $char === ')') {
+			$depth--;
+			$word = '';
+		} elseif ($char === ':' && $depth === 0 && $word !== '') {
+			$names[] = $word;
+			$word    = '';
+		} elseif (preg_match('/[A-Za-z0-9_$]/', $char) === 1) {
+			$word .= $char;
+		} else {
+			$word = '';
+		}
+	}
+
+	$names = array_values(array_unique($names));
+	sort($names);
+
+	return $names;
+}
+
+/**
+ * Every string literal in a browser script that names a host of its own:
+ * "https://host/...", "http://host/..." or a protocol-relative "//host/...".
+ *
+ * This is how "no request this page makes leaves this site" is read off a file.
+ * It reads the literals rather than the raw text, so a comment that mentions an
+ * address is not one; and it is a list rather than a flag, so a failure names
+ * the address it found.
+ *
+ * A host has to be there for a literal to count. The share dialog builds this
+ * site's own address out of window.location and a bare "//", which names
+ * nobody: the host in that one comes from the page the script is running on.
+ *
+ * @param string $file
+ * @return array
+ */
+function mcm_js_absolute_urls($file)
+{
+	$scan  = mcm_js_markers(file_get_contents($file));
+	$found = array();
+
+	foreach ($scan['literals'] as $literal) {
+		$value = substr($literal, 1, -1);
+		if (preg_match('~^(?:[A-Za-z][A-Za-z0-9+.-]*:)?//[A-Za-z0-9]~', $value) === 1) {
+			$found[] = $value;
+		}
+	}
+
+	return $found;
 }
 
 /**
