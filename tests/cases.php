@@ -5000,6 +5000,57 @@ t_group('tmdb proxy projections', function () {
 	// And escaping is not this file's job: a stored value keeps the bytes that
 	// were sent, and is escaped where it lands.
 	t_same('<script>alert(1)</script>', mcm_at($of('list_markup_name'), 'name'), 'a list name that is markup keeps its bytes');
+
+	// The movie dialog's own selection (issue #37): a projected videos answer
+	// goes in, and only usable YouTube trailers and teasers, ranked, come out.
+	$dialog_trailers = $of('dialog_trailers');
+	t_same(3, count($dialog_trailers), 'a vimeo row, a non-trailer row and the old response shape are all dropped');
+	t_same('trailer1080', mcm_at($dialog_trailers, '0.key'), 'the higher-resolution trailer sorts first');
+	t_same('trailer720', mcm_at($dialog_trailers, '1.key'), 'the lower-resolution trailer sorts second');
+	t_same('teaser1', mcm_at($dialog_trailers, '2.key'), 'a teaser sorts behind every trailer regardless of size');
+
+	// The friendly empty state this fix exists for: the old code read
+	// $trailers['youtube'] straight off an upstream answer and fataled the
+	// moment that key was not there. A movie with no videos, or none of them
+	// usable, now yields an empty list instead - what dialog.php's "No trailer
+	// available" branch is keyed on - never a warning or a fatal error.
+	t_same(array(), $of('dialog_trailers_empty'), 'a movie with no videos selects no trailers');
+	t_same(array(), $of('dialog_trailers_none_usable'), 'videos that are not a usable YouTube trailer or teaser select none');
+
+	// The dialog's actual markup (issue #37 follow-up): the selection is right,
+	// but only the rendered HTML proves the friendly panel and the trailer
+	// accordion themselves come out as the page needs them.
+	t_same(
+		'<div class="alert alert-warning"><strong>No trailer available.</strong></div>',
+		$of('dialog_trailer_html_empty'),
+		'no usable trailer renders the exact friendly empty-state alert, not a warning or a fatal error'
+	);
+
+	$usable_html = $of('dialog_trailer_html_usable');
+	t_contains('class="panel-group" id="accordion"', $usable_html, 'a usable trailer renders inside the accordion, not the empty-state alert');
+	t_contains('src="//www.youtube.com/embed/trailer1080?autoplay=0&rel=0"', $usable_html, 'the higher-resolution trailer gets a YouTube embed iframe keyed by its own video id');
+	t_contains('src="//www.youtube.com/embed/trailer720?autoplay=0&rel=0"', $usable_html, 'the lower-resolution trailer gets its own embed too');
+	t_contains('src="//www.youtube.com/embed/teaser1?autoplay=0&rel=0"', $usable_html, 'and the teaser gets its own embed');
+	t_contains('collapse0" class="panel-collapse collapse in"', $usable_html, 'the first panel starts open');
+	t_contains('collapse1" class="panel-collapse collapse"', $usable_html, 'the second panel starts closed');
+	// Ordering: the same rank mcm_dialog_usable_trailers() already proved -
+	// trailer before trailer, trailer before teaser - has to survive into where
+	// each one's markup actually lands in the string a browser receives.
+	$pos_1080   = strpos($usable_html, 'trailer1080');
+	$pos_720    = strpos($usable_html, 'trailer720');
+	$pos_teaser = strpos($usable_html, 'teaser1');
+	t_ok($pos_1080 !== false && $pos_720 !== false && $pos_teaser !== false, 'all three trailers appear in the rendered markup');
+	t_ok($pos_1080 < $pos_720, 'the higher-resolution trailer is rendered before the lower-resolution one');
+	t_ok($pos_720 < $pos_teaser, 'and every trailer is rendered before the teaser');
+
+	// Escaping: a hostile name and a key shaped like a URL/attribute break-out
+	// are stored and projected exactly as they arrived - escaping is the
+	// renderer's job, and this is where it has to happen.
+	$hostile_html = $of('dialog_trailer_html_hostile');
+	t_lacks('<script>alert(1)</script>', $hostile_html, 'a trailer name that is markup does not survive into the rendered HTML unescaped');
+	t_contains('&lt;script&gt;alert(1)&lt;/script&gt;', $hostile_html, 'it is HTML-escaped instead');
+	t_lacks('abc"><script>', $hostile_html, 'a key shaped like an attribute break-out does not survive into the iframe src unescaped');
+	t_contains(rawurlencode('abc"><script>alert(1)</script>'), $hostile_html, 'the key is URL-encoded into the iframe src instead');
 });
 
 t_group('tmdb proxy configuration cache', function () {
