@@ -930,6 +930,12 @@ $mcm_defaults = array(
 	'MCM_TMDB_CONNECT_TIMEOUT_MS' => 3000,
 	'MCM_TMDB_TIMEOUT_MS'         => 8000,
 	'MCM_TMDB_MAX_BYTES'          => 1048576,
+	// Where the proxy in inc/tmdb_proxy.php keeps the one answer it caches, the
+	// TMDb configuration. Empty means a private directory of this application's
+	// own under the system temporary directory, which is what a site that
+	// configures nothing gets; the cache is advisory either way, so a directory
+	// that cannot be used costs a request rather than an error.
+	'MCM_TMDB_CACHE_DIR'          => '',
 );
 
 foreach ($mcm_defaults as $mcm_name => $mcm_value) {

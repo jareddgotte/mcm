@@ -46,6 +46,14 @@ define("TMDB_READ_ACCESS_TOKEN", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 //define('MCM_TMDB_TIMEOUT_MS', 8000);
 /** how much of a response will be read before it is abandoned, in bytes. */
 //define('MCM_TMDB_MAX_BYTES', 1048576);
+/**
+ * where /tmdb.php keeps its one cached answer, the TMDb configuration, for a
+ * day at a time. Empty means a private directory of this application's own
+ * under the system temporary directory. Set it only where that directory is
+ * wiped between requests or shared with something else; the cache is advisory,
+ * so a directory that cannot be used costs a request rather than an error.
+ */
+//define('MCM_TMDB_CACHE_DIR', '');
 
 /**
  * Configuration file for: Database Connection

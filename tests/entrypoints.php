@@ -645,18 +645,16 @@ function mcm_check_entry_point($file, $root)
 }
 
 /**
- * The entry points that have adopted the shared guards, project-relative and
- * sorted.
+ * Every file that loads the shared guards, project-relative and sorted.
  *
  * Adoption is deliberate and endpoint by endpoint, so this is a written-down
  * list rather than something derived from the source: derived from the source
  * it would agree with whatever the source happens to do, which is the one thing
  * an adoption check must not do.
  *
- * index.php is on it for a reason that is not a guard: it is the page that hands
- * the session's CSRF token to the browser, and mcm_csrf_token() lives in the
- * guards. mcm_unguarded_guard_users() below is what says so, and the suite
- * checks that it guards nothing.
+ * Most of these are mutation endpoints that ask all four questions. Three are
+ * not, and mcm_unguarded_guard_users() below names them with their reasons; the
+ * suite checks that each of those guards nothing.
  *
  * @return array
  */
@@ -669,27 +667,57 @@ function mcm_guarded_entry_points()
 		'delete_list.php',
 		'delete_movie.php',
 		'import_list.php',
+		'inc/tmdb_proxy.php',
 		'index.php',
 		'move.php',
 		'rename_list.php',
 		'share_lists.php',
+		'tmdb.php',
 	);
 }
 
 /**
- * The entry points that load the guards without being guarded by them.
+ * The files that load the guards without being guarded by them at all.
  *
- * A page on this list may call the token helpers and nothing else. Naming them
- * separately is what stops "loads inc/guards.php" from quietly becoming the
- * same claim as "refuses a request that should be refused": index.php serves a
- * page to whoever asks for it and always has, and the suite asserts that it
- * calls none of the four guards.
+ * A file on this list may call the shared helpers - the token, the value checks,
+ * the bounded refusal bodies - and none of the four guards. Naming them
+ * separately is what stops "loads inc/guards.php" from quietly becoming the same
+ * claim as "refuses a request that should be refused", and the suite asserts of
+ * each of them that it calls no guard at all.
+ *
+ * One file is on it: index.php serves a page to whoever asks for it and always
+ * has, and needs mcm_csrf_token() to hand the browser a token.
  *
  * @return array
  */
 function mcm_unguarded_guard_users()
 {
 	return array('index.php');
+}
+
+/**
+ * The files that adopt some of the guards for a read rather than all four for a
+ * write.
+ *
+ * The four-in-order rule above is a rule about writing: a request that will
+ * change a row has to be a POST, from a signed-in visitor, carrying this
+ * session's token, for a list that is theirs. A read has no row to protect, so
+ * two of those questions do not apply - and saying so in a list of its own is
+ * what keeps "this endpoint reads" from being a way to opt out of the other
+ * two.
+ *
+ * The TMDb proxy is the only such file. tmdb.php is the door and
+ * inc/tmdb_proxy.php is its policy; between them they serve a GET or a POST
+ * without a token, and ask for a signed-in user, and for the owner of the local
+ * list a request names, on the operations that need them. What each operation
+ * asks for is asserted by driving requests at it, in the proxy groups of
+ * tests/cases.php.
+ *
+ * @return array
+ */
+function mcm_read_guarded_guard_users()
+{
+	return array('inc/tmdb_proxy.php', 'tmdb.php');
 }
 
 /**
