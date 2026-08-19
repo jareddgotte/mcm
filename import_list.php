@@ -9,7 +9,12 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // goes out to TMDb, which is work nobody should be able to make this site do
 // without an account.
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+// The list itself is read through the proxy's own "list" operation rather than
+// through the vendored wrapper: one place decides what this site may ask TMDb
+// for, one place holds the credential, and one place says which fields of an
+// answer are repeated. mcm_tmdb_resolve() is that policy, called here in this
+// process rather than over an HTTP request to this site's own server.
+require_once(__DIR__ . '/inc/tmdb_proxy.php');
 
 // A POST from a signed-in visitor, carrying this session's own token. All three
 // are settled before the connection is opened, and so long before TMDb is asked
@@ -19,13 +24,24 @@ mcm_require_login();
 mcm_require_csrf();
 
 $movie_list_id = isset($_POST['movie_list_id']) ? $_POST['movie_list_id'] : '';
-//$movie_list_id = 1;
-// Be sure to handle whether it's an id OR a url with the id in it
-$tmdb_list_id = isset($_POST['tmdb_list_id']) ? $_POST['tmdb_list_id'] : '';
-//$tmdb_list_id = "5212934a760ee36af148407c"; // debug
-//The following may be used when "creating list from import"
-//$list_name = isset($_POST['name']) ? $_POST['name'] : '';
-//$list_name = 'test list';
+$tmdb_list_id  = isset($_POST['tmdb_list_id']) ? $_POST['tmdb_list_id'] : '';
+
+// The TMDb list identifier is settled here, before the connection and before
+// the proxy is called at all, because it is the one value on this page somebody
+// typed: an answer it can act on belongs to whoever typed it, the way
+// mcm_list_name_error() answers a bad list name, rather than being one of the
+// bounded refusals a page's own computed value gets. Both shapes TMDb has ever
+// issued are accepted, and mcm_tmdb_list_identifier() is what says so - the
+// same check the operation itself will make of the value passed to it.
+if (!is_string($tmdb_list_id) || trim($tmdb_list_id) === '') {
+	echo 'Error: No import list id given.';
+	exit();
+}
+$tmdb_list_id = mcm_tmdb_list_identifier($tmdb_list_id);
+if ($tmdb_list_id === null) {
+	echo 'Error: That is not a TMDb list id.';
+	exit();
+}
 
 //echo "trying to connect to db<br>\n";
 // The connection is opened here rather than after the import so that ownership
@@ -36,23 +52,34 @@ $db_connection = mcm_db_or_fail('import_list');
 $movie_list_id = mcm_require_list_owner($db_connection, $movie_list_id);
 $user_id       = mcm_current_user_id();
 
-if ($tmdb_list_id === '') { echo 'Error: No import list id given.'; exit(); }
-
-// Built for this request and thrown away with it: the wrapper holds the TMDb
-// credential, which has no business being written into the session store.
-$tmdb = new TMDb(TMDB_API_KEY);
-
 //echo "importing list<br>\n";
-$ImportList = $tmdb->getList($tmdb_list_id);
-if (isset($ImportList['status_code'])) {
-	// Both values come straight from TMDb, so neither is rendered as markup.
-	printf("Error: Status code: %s | Message: %s\n", mcm_html($ImportList['status_code']), mcm_html($ImportList['status_message']));
-	//var_dump($ImportList);
-	exit();
+// The proxy's list operation, over the connection this page already holds. It
+// asks its own questions again - a signed-in caller, values it accepts, and the
+// owner of the local list named - because the caller policy is the operation's
+// and not something this page may assert on its behalf. What comes back is the
+// projection and nothing else: the five fields below, rebuilt field by field,
+// with no upstream body, URL or credential anywhere in it.
+$imported = mcm_tmdb_resolve('list', array(
+	'list_id'       => $tmdb_list_id,
+	'movie_list_id' => $movie_list_id,
+), $db_connection);
+
+if (empty($imported['ok'])) {
+	// Why it failed is the log's, not the client's: mcm_tmdb_resolve() has
+	// already categorised it, and the visitor gets this site's one generic
+	// message like every other failure here.
+	mcm_log('TMDb import', 'the list could not be read: ' . mcm_log_detail($imported['category']));
+	mcm_fail();
 }
 
 //echo "iterating through imported list<br>\n";
-foreach ($ImportList['items'] as $v) {
+foreach ($imported['data']['items'] as $v) {
+	// A row TMDb sent without a usable identifier is not a film this site can
+	// store: tmdb_movie_id is the key every table below joins on, so an item
+	// without one is skipped rather than written as a nameless zero.
+	if ($v['id'] === null) {
+		continue;
+	}
 	// check if movie is already added to master list
 	//echo "checking if movie is already added to master list<br>\n";
 	$query = $db_connection->prepare('SELECT * FROM master_movie_list WHERE tmdb_movie_id = :id');

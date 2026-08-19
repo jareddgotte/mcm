@@ -50,9 +50,11 @@
  * about never. The cache holds the projection, not the upstream body, so even
  * the file on disk carries nothing that could not be served.
  *
- * Nothing in production calls any of this yet: search, the trailer modal and
- * list import are repointed at it by later issues. Loading this file changes no
- * existing request.
+ * List import is the first thing in this site to use it, and it uses it without
+ * an HTTP request: import_list.php calls mcm_tmdb_resolve() in its own process,
+ * so the operation's questions - who is asking, what they asked for, whose list
+ * it is - are asked of it exactly as they are asked of a browser at tmdb.php.
+ * Search and the trailer modal are repointed at it by later issues.
  */
 
 // The client, the configuration and mcm_log() come from inc/tmdb.php and the
@@ -153,8 +155,8 @@ function mcm_tmdb_operations()
 		),
 		// List import. The request names the TMDb list to read and the local
 		// list it is meant for, and the local one has to belong to whoever is
-		// asking - settled before TMDb is asked anything. import_list.php is
-		// moved onto this by issue #38; it already posts movie_list_id.
+		// asking - settled before TMDb is asked anything. This is what
+		// import_list.php reads a list through.
 		'list' => array(
 			'accepts'  => array('list_id', 'movie_list_id'),
 			'required' => array('list_id', 'movie_list_id'),
@@ -903,15 +905,25 @@ function mcm_tmdb_require_session($operation)
  * belonging to somebody else and a list that does not exist are answered
  * identically, so the response says nothing about whose it is.
  *
- * @param array $plan as mcm_tmdb_plan() returns on success
+ * A caller that already holds a connection passes it in, and the question is
+ * asked over that one rather than over a second: import_list.php has opened one
+ * to settle the same ownership for its own writes by the time it gets here. It
+ * is the connection that is shared and never the answer - the question is asked
+ * again regardless of who is asking, because "the list is theirs" is this
+ * operation's own condition and not something a caller may assert on its behalf.
+ *
+ * @param array    $plan          as mcm_tmdb_plan() returns on success
+ * @param PDO|null $db_connection one the caller already has, or null to open one
  */
-function mcm_tmdb_require_owner(array $plan)
+function mcm_tmdb_require_owner(array $plan, $db_connection = null)
 {
 	if (mcm_tmdb_caller_policy($plan['operation']) !== 'owner') {
 		return;
 	}
 
-	$db_connection = mcm_db_or_fail('tmdb proxy: settling who owns the list');
+	if ($db_connection === null) {
+		$db_connection = mcm_db_or_fail('tmdb proxy: settling who owns the list');
+	}
 	mcm_require_list_owner($db_connection, $plan['values']['movie_list_id']);
 }
 
@@ -960,6 +972,54 @@ function mcm_tmdb_run(array $plan)
 	}
 
 	return array('ok' => true, 'data' => $data);
+}
+
+/**
+ * Settle one operation and run it: the whole of the proxy's policy, in order.
+ *
+ * Both ways into the proxy go through this. tmdb.php serves a browser and turns
+ * what comes back into a JSON body; import_list.php is a page of this site that
+ * needs the answer itself, and calls this directly rather than making an HTTP
+ * request to its own server. Neither of them decides the order the questions
+ * are asked in, and neither of them can skip one: the caller policy belongs to
+ * the operation, so it is asked of whoever is asking.
+ *
+ * The order is inc/guards.php's own, and it is the point. The operation is
+ * named first, because which questions come next is a property of the
+ * operation. Then who is asking, which the session answers on its own. Then the
+ * request's own values, which are pure. Then, for a list, whose list it is -
+ * the one question that needs a connection. Only then TMDb. A request refused
+ * anywhere in that sequence has cost this site no outbound request.
+ *
+ * A refusal ends the request where it stands, with the bounded body from
+ * inc/guards.php and the reason in the log; an upstream failure comes back as a
+ * value, because a caller may have something better to do with it than repeat
+ * it.
+ *
+ * @param mixed    $operation     the requested operation name
+ * @param mixed    $request       the request's own fields
+ * @param PDO|null $db_connection one the caller already has, for the ownership
+ *                                question, or null to open one
+ * @return array as mcm_tmdb_run() returns
+ */
+function mcm_tmdb_resolve($operation, $request, $db_connection = null)
+{
+	if (!mcm_tmdb_operation_exists($operation)) {
+		// The same bounded body a guard sends, with the reason in the log and
+		// nowhere else.
+		mcm_json_error(400, 'the TMDb proxy refused a request: no such operation: ' . mcm_log_detail($operation));
+	}
+
+	mcm_tmdb_require_session($operation);
+
+	$plan = mcm_tmdb_plan($operation, $request);
+	if (empty($plan['ok'])) {
+		mcm_json_error(400, 'the TMDb proxy refused a request: ' . $plan['reason']);
+	}
+
+	mcm_tmdb_require_owner($plan, $db_connection);
+
+	return mcm_tmdb_run($plan);
 }
 
 /*
@@ -1018,27 +1078,12 @@ function mcm_tmdb_serve($request)
 	}
 
 	$operation = (is_array($request) && isset($request[MCM_TMDB_OPERATION_FIELD])) ? $request[MCM_TMDB_OPERATION_FIELD] : '';
-	if (!mcm_tmdb_operation_exists($operation)) {
-		// Named first, because which questions come next is a property of the
-		// operation. The same bounded body a guard sends, with the reason in the
-		// log and nowhere else.
-		mcm_json_error(400, 'the TMDb proxy refused a request: no such operation: ' . mcm_log_detail($operation));
-	}
 
-	// Then who is asking, which the session answers on its own.
-	mcm_tmdb_require_session($operation);
-
-	// Then what they asked for.
-	$plan = mcm_tmdb_plan($operation, $request);
-	if (empty($plan['ok'])) {
-		mcm_json_error(400, 'the TMDb proxy refused a request: ' . $plan['reason']);
-	}
-
-	// And then, for a list, whose list it is - the one question that needs a
-	// connection, and the last one before anything is asked of TMDb.
-	mcm_tmdb_require_owner($plan);
-
-	$result = mcm_tmdb_run($plan);
+	// Everything that decides whether this request may be made at all, and in
+	// which order, is mcm_tmdb_resolve()'s. This file's door holds no policy of
+	// its own beyond the method: what is left here is turning an answer, or a
+	// failure, into a body.
+	$result = mcm_tmdb_resolve($operation, $request);
 	if (empty($result['ok'])) {
 		mcm_tmdb_respond($result['status'], array(
 			'error'   => $result['category'],
@@ -1048,7 +1093,7 @@ function mcm_tmdb_serve($request)
 
 	mcm_tmdb_respond(200, array(
 		'ok'        => true,
-		'operation' => $plan['operation'],
+		'operation' => $operation,
 		'data'      => $result['data'],
 	));
 }

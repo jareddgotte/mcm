@@ -3513,7 +3513,9 @@ t_group('movie endpoints refuse before the database', function () {
 		// An import is the one endpoint that would otherwise send a request of
 		// its own, so it is worth saying separately: neither an anonymous
 		// request nor an authenticated one reaches TMDb before the list it
-		// would write into has been settled.
+		// would write into has been settled. This fixture has no stub to count
+		// requests against, so it says so from the log; 'import refusals cost no
+		// outbound request' says it from the far end.
 		$tmdb = array('movie_list_id' => 11, 'tmdb_list_id' => '5212934a760ee36af148407c');
 		foreach (array('an anonymous' => array(), 'a signed-in' => $as_signed_in) as $description => $headers) {
 			$response = mcm_http_post($server, '/import_list.php', $tmdb, $headers);
@@ -3529,22 +3531,34 @@ t_group('movie endpoints refuse before the database', function () {
 t_group('import_list.php source checks of last resort', function () {
 	// Guard order and scope for every endpoint, including import_list.php's own
 	// ownership guard, are proven behaviourally by 'movie ownership over a real
-	// database': a missing or misplaced guard, a move missing either end, an
-	// unscoped duplicate check, a GET that still mutates and a POST that mutates
-	// without a CSRF token all show up there, because a refused request is
-	// snapshotted before and after and a permitted one is checked against what
-	// it actually wrote. What is left here is only what that group cannot
-	// reach: import_list.php's own call out to TMDb, which no case in this
-	// suite makes, so nothing behavioural can show where its ownership check
-	// sits relative to that call, or how its duplicate query scopes its WHERE
-	// clause. These read the source because the path cannot be executed here,
-	// and reading the source proves what the text says, not what a request does.
-	$import_source = mcm_flat_source(MCM_REPO_ROOT . '/import_list.php');
+	// database', and what an authorized import actually writes is proven by
+	// 'import over a real database and a stubbed TMDb': a missing or misplaced
+	// guard, a move missing either end, an unscoped duplicate check, a GET that
+	// still mutates and a POST that mutates without a CSRF token all show up
+	// there, because a refused request is snapshotted before and after and a
+	// permitted one is checked against what it actually wrote. What is left here
+	// is what no request can show: that there is no second way for this page to
+	// reach TMDb at all. A request only ever exercises the path the page took.
+	$import        = MCM_REPO_ROOT . '/import_list.php';
+	$import_source = mcm_flat_source($import);
 	$ownership     = strpos($import_source, 'mcm_require_list_owner');
-	$tmdb_call     = strpos($import_source, 'getList');
+	$tmdb_call     = strpos($import_source, 'mcm_tmdb_resolve');
 
 	t_ok($ownership !== false && $tmdb_call !== false, 'import_list.php has both an ownership check and a call to TMDb');
 	t_ok($ownership < $tmdb_call, 'the ownership check appears before the call to TMDb in import_list.php\'s source');
+
+	// The list comes through the proxy operation and through nothing else. The
+	// vendored wrapper is still in the tree and still used by other pages, so
+	// "this page no longer builds one" is a fact about this page that only its
+	// source can carry.
+	t_same(0, mcm_count_new($import, 'TMDb'), 'import_list.php does not build the vendored wrapper');
+	// A method call rather than a function call, so it is read off the source
+	// text: mcm_count_calls_in() deliberately skips anything behind "->".
+	t_lacks('getList', $import_source, 'import_list.php does not call the vendored list method');
+	t_same(0, mcm_count_calls($import, 'curl_init'), 'import_list.php speaks no HTTP of its own');
+	t_same(0, mcm_count_constant_reads($import, 'TMDB_API_KEY'), 'import_list.php reads no TMDb credential');
+	t_same(0, mcm_count_constant_reads($import, 'TMDB_READ_ACCESS_TOKEN'), 'import_list.php reads no TMDb read token either');
+	t_same(0, mcm_count_debug_output($import), 'import_list.php dumps nothing into the response');
 
 	t_contains(
 		'JOIN movie_lists b ON a.movie_list_id = b.movie_list_id WHERE tmdb_movie_id = :tmdb_movie_id AND user_id = :user_id',
@@ -3829,9 +3843,11 @@ t_group('movie ownership over a real database', function () {
 
 		/* Importing --------------------------------------------------------- */
 
-		// The refusals happen before the import contacts TMDb, so they are the
-		// part of this endpoint a test can drive. What an authorized import
-		// then writes is not covered here: that call goes out to the network.
+		// The refusals happen before the import contacts TMDb, which is what
+		// this group is about: a refused request has written nothing. What an
+		// authorized import then writes is 'import over a real database and a
+		// stubbed TMDb', which runs the same endpoint against a stub and counts
+		// what actually went out.
 		$imports = array(
 			'an anonymous import' => array('headers' => array(), 'list' => $alice_one, 'status' => 401, 'body' => $unauthorised),
 			"an import into somebody else's list" => array('headers' => $as_bob, 'list' => $alice_one, 'status' => 403, 'body' => $forbidden),
@@ -3848,8 +3864,8 @@ t_group('movie ownership over a real database', function () {
 		}
 
 		// The owner is not refused: she gets past both guards and stops on the
-		// page's own check, which is as far as a case can follow her without
-		// letting the suite talk to TMDb.
+		// page's own check of the one value a person typed. This fixture points
+		// at no stub, so this is as far as she is followed here.
 		$before   = call_user_func($state);
 		$response = mcm_http_post($server_handle, '/import_list.php', array('movie_list_id' => $alice_one, 'tmdb_list_id' => ''), $as_alice);
 
@@ -4755,23 +4771,44 @@ t_group('tmdb proxy caller policy', function () {
 
 		// The order that makes that true, read off the one function that sets
 		// it: the session first, then the values, then the connection, and only
-		// then TMDb.
-		$serve = mcm_method_tokens(MCM_REPO_ROOT . '/inc/tmdb_proxy.php', 'mcm_tmdb_serve');
-		t_ok(count($serve) > 0, 'mcm_tmdb_serve() is declared');
+		// then TMDb. That function is mcm_tmdb_resolve() rather than the entry
+		// point, because the entry point is not the only way in any more -
+		// import_list.php calls the same operation in its own process, and reading
+		// the order off what both of them go through is what makes it an order
+		// neither of them can have its own version of.
+		$resolve = mcm_method_tokens(MCM_REPO_ROOT . '/inc/tmdb_proxy.php', 'mcm_tmdb_resolve');
+		t_ok(count($resolve) > 0, 'mcm_tmdb_resolve() is declared');
 		$order = array();
-		foreach ($serve as $position => $token) {
+		foreach ($resolve as $position => $token) {
 			if ($token['id'] === T_STRING && !isset($order[$token['text']])) {
 				$order[$token['text']] = $position;
 			}
 		}
 		$found = true;
 		foreach (array('mcm_tmdb_require_session', 'mcm_tmdb_plan', 'mcm_tmdb_require_owner', 'mcm_tmdb_run') as $step) {
-			$found = t_ok(isset($order[$step]), 'mcm_tmdb_serve() calls ' . $step . '()') && $found;
+			$found = t_ok(isset($order[$step]), 'mcm_tmdb_resolve() calls ' . $step . '()') && $found;
 		}
 		if ($found) {
 			t_ok($order['mcm_tmdb_require_session'] < $order['mcm_tmdb_plan'], 'the session is settled before the request values are');
 			t_ok($order['mcm_tmdb_plan'] < $order['mcm_tmdb_require_owner'], 'the values are settled before the list is looked up');
 			t_ok($order['mcm_tmdb_require_owner'] < $order['mcm_tmdb_run'], 'ownership is settled before TMDb is asked anything');
+		}
+
+		// And the entry point holds none of that order itself: it hands the
+		// request over once and turns what comes back into a body. A step it
+		// called on its own would be a second version of the sequence above.
+		$serve = mcm_method_tokens(MCM_REPO_ROOT . '/inc/tmdb_proxy.php', 'mcm_tmdb_serve');
+		t_ok(count($serve) > 0, 'mcm_tmdb_serve() is declared');
+		t_same(1, mcm_count_calls_in($serve, 'mcm_tmdb_resolve'), 'serving a request settles it through mcm_tmdb_resolve()');
+		foreach (array('mcm_tmdb_require_session', 'mcm_tmdb_plan', 'mcm_tmdb_require_owner', 'mcm_tmdb_run') as $step) {
+			t_same(0, mcm_count_calls_in($serve, $step), 'mcm_tmdb_serve() does not call ' . $step . '() itself');
+		}
+		// The same is true of the one page that calls the operation directly: it
+		// asks for the answer, and asks for it through the same one function.
+		$import = MCM_REPO_ROOT . '/import_list.php';
+		t_same(1, mcm_count_calls($import, 'mcm_tmdb_resolve'), 'import_list.php reads its list through mcm_tmdb_resolve() too');
+		foreach (array('mcm_tmdb_require_session', 'mcm_tmdb_plan', 'mcm_tmdb_require_owner', 'mcm_tmdb_run', 'mcm_tmdb_get') as $step) {
+			t_same(0, mcm_count_calls($import, $step), 'import_list.php does not call ' . $step . '() itself');
 		}
 
 		// And the ownership question is the only one that opens a connection.
@@ -5306,6 +5343,425 @@ t_group('tmdb proxy list ownership over a real database', function () {
 		), $as_bob);
 		t_same(200, $response['status'], 'the other account is served for the list it does own');
 	} catch (Throwable $error) {
+		mcm_server_stop($app);
+		mcm_server_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_server_stop($stub);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * List import, over the proxy
+ * ---------------------------------------------------------------------------
+ *
+ * import_list.php is the first page of this site to read TMDb through the
+ * proxy, and it does it without an HTTP request: it calls mcm_tmdb_resolve() in
+ * its own process. That makes the same two claims checkable that the proxy
+ * groups above make of tmdb.php, and one more that only an import can make.
+ *
+ * The first is what a refusal costs. Every way of being refused - the method,
+ * the session, the token, a list identifier that is not one, a local list that
+ * is somebody else's or nobody's - has to leave the stub's request log empty,
+ * because the log is the only thing that can tell "refused before the call"
+ * from "refused after it".
+ *
+ * The second is what a refusal wrote, which is nothing, and the third is what a
+ * permitted import wrote, which is rows. Both need real rows to be about
+ * anything, so they live in the group that runs only when there is a database
+ * server; the refusals that are settled before a connection is even opened are
+ * driven without one in the group just below.
+ */
+
+t_group('import refusals cost no outbound request', function () {
+	// No database in this fixture, and none needed: everything here is refused
+	// before a connection would be opened, or - in the last case - by the
+	// connection itself. What the stub's log has to show, either way, is
+	// nothing at all.
+	$bundle  = mcm_tmdb_proxy_fixture('import-refusals');
+	$fixture = $bundle['fixture'];
+	$token   = mcm_tmdb_test_token();
+
+	$signed_in  = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+	$signed_out = 'e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2';
+	mcm_seed_signed_in($fixture, $signed_in, array('user_name' => 'importer', 'user_id' => 7, 'user_logged_in' => 1));
+	mcm_seed_session($fixture, $signed_out, array('user_name' => 'nobody', 'user_logged_in' => 0));
+	$as_owner = mcm_session_headers($signed_in);
+
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$wrong_method = '{"error":"method_not_allowed","message":"That request method is not allowed here."}';
+	$tmdb_list    = '5212934a760ee36af148407c';
+
+	try {
+		$refusals = array(
+			'an anonymous import' => array(
+				'headers' => array(),
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => $tmdb_list),
+				'status'  => 401,
+				'body'    => $unauthorised,
+			),
+			'an import from a signed-out session' => array(
+				'headers' => array('Cookie: PHPSESSID=' . $signed_out),
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => $tmdb_list),
+				'status'  => 401,
+				'body'    => $unauthorised,
+			),
+			'an import with no token' => array(
+				'headers' => array('Cookie: PHPSESSID=' . $signed_in),
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => $tmdb_list),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			// A person typed the TMDb list identifier, so an answer it can act
+			// on is the answer it gets - the same way a bad list name is
+			// answered - rather than one of the bounded refusals a value this
+			// page computed for itself gets.
+			'an import with no TMDb list id' => array(
+				'headers' => $as_owner,
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => ''),
+				'status'  => 200,
+				'body'    => 'Error: No import list id given.',
+			),
+			'an import with a TMDb list id that is not one' => array(
+				'headers' => $as_owner,
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => 'not a list id'),
+				'status'  => 200,
+				'body'    => 'Error: That is not a TMDb list id.',
+			),
+			// The shape check is what stops a list identifier from being a path
+			// or a URL: both of these would otherwise become part of the path
+			// one request is made with.
+			'an import naming a path instead of a list' => array(
+				'headers' => $as_owner,
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => '../configuration'),
+				'status'  => 200,
+				'body'    => 'Error: That is not a TMDb list id.',
+			),
+			'an import naming a URL instead of a list' => array(
+				'headers' => $as_owner,
+				'fields'  => array('movie_list_id' => 11, 'tmdb_list_id' => 'https://example.invalid/list/1'),
+				'status'  => 200,
+				'body'    => 'Error: That is not a TMDb list id.',
+			),
+		);
+
+		foreach ($refusals as $description => $case) {
+			mcm_tmdb_stub_reset($fixture);
+			$response = mcm_http_post($bundle['app'], '/import_list.php', $case['fields'], $case['headers']);
+
+			t_same($case['status'], $response['status'], $description . ' is refused');
+			t_same($case['body'], $response['body'], $description . ' gets the answer that refusal always gives');
+			t_lacks('greatsuccess', $response['body'], $description . ' is not told it worked');
+			t_same(array(), mcm_tmdb_stub_requests($fixture), $description . ' made no request to TMDb');
+			// This fixture has no database, so anything that reached one would
+			// have logged the connection it could not open. Nothing did, so
+			// nothing could have been written either.
+			t_lacks('Database error', $response['log'], $description . ' stops before it reaches the database');
+			t_lacks($token, $response['body'], $description . ' carries no credential in its answer');
+			t_lacks($token, $response['log'], $description . ' writes no credential to the log');
+		}
+
+		// A GET is refused on the method alone, whether or not it carries a
+		// session and a token, and costs nothing either.
+		foreach (array('an unauthenticated' => array(), "the owner's" => $as_owner) as $whose => $headers) {
+			mcm_tmdb_stub_reset($fixture);
+			$fields   = array('movie_list_id' => 11, 'tmdb_list_id' => $tmdb_list);
+			$response = mcm_http($bundle['app'], '/import_list.php?' . http_build_query($fields), $headers);
+
+			t_same(405, $response['status'], $whose . ' GET import is refused');
+			t_same($wrong_method, $response['body'], $whose . ' GET import gets the shared fixed body');
+			t_same(array(), mcm_tmdb_stub_requests($fixture), $whose . ' GET import made no request to TMDb');
+			t_lacks('Database error', $response['log'], $whose . ' GET import stops before the database');
+		}
+
+		// And the one refusal that does need a connection: whose list this is.
+		// The connection is what fails here, which is exactly the point - the
+		// question is asked before TMDb is, so an import that cannot even find
+		// out whose list it is has still asked TMDb for nothing.
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($bundle['app'], '/import_list.php', array(
+			'movie_list_id' => 11,
+			'tmdb_list_id'  => $tmdb_list,
+		), $as_owner);
+
+		t_same(500, $response['status'], 'an import that cannot settle ownership fails');
+		t_same(mcm_generic_message(), $response['body'], 'and says only the generic thing about it');
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'an import that never settled ownership asked TMDb nothing');
+		t_contains('connection failed', $response['log'], 'the connection it could not open is what it logged');
+		t_lacks($token, $response['log'], 'and the log carries no credential');
+	} catch (Throwable $error) {
+		mcm_tmdb_proxy_stop($bundle);
+		throw $error;
+	}
+	mcm_tmdb_proxy_stop($bundle);
+});
+
+t_group('import over a real database and a stubbed TMDb', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		t_skip('the list import cases', mcm_db_skip_reason());
+		return;
+	}
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded for the import cases')) {
+		return;
+	}
+
+	$pdo = mcm_db_reset_collection($server);
+
+	// Two accounts. Alice has two lists, one of them shared by link; Bob has
+	// one. Every claim below about isolation is a claim about these rows.
+	$alice = mcm_db_seed_user($pdo, 'alice', 'p' . bin2hex(random_bytes(6)));
+	$bob   = mcm_db_seed_user($pdo, 'bob', 'p' . bin2hex(random_bytes(6)));
+
+	$alice_one = mcm_db_seed_list($pdo, $alice, 'alice one', 0);
+	$alice_two = mcm_db_seed_list($pdo, $alice, 'alice two', 1, 1);
+	$bob_one   = mcm_db_seed_list($pdo, $bob, 'bob one', 0);
+
+	// The shared master list starts with one of the two films the stub's list
+	// holds, and with stale details, so an import has both a row to update and
+	// a row to insert. Bob already has that film, which is what makes the
+	// duplicate check's scope visible: Alice must still get it.
+	mcm_db_seed_master_movie($pdo, 102, 'A Stale Title', '1901-01-01');
+	mcm_db_seed_movie($pdo, $bob_one, 102);
+
+	$fixture = mcm_db_fixture('import-list', $server);
+	$app     = mcm_server_start($fixture);
+	$stub    = mcm_server_start($fixture);
+	$base    = 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php';
+	$db      = array(
+		'DB_HOST' => mcm_db_host_setting($server),
+		'DB_NAME' => $server['database'],
+		'DB_USER' => $server['user'],
+		'DB_PASS' => $server['password'],
+	);
+	mcm_tmdb_configure($fixture, $db + array(
+		'MCM_TMDB_BASE_URL'  => $base,
+		'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+	));
+
+	$alice_session = 'd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1';
+	$bob_session   = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2';
+	mcm_seed_signed_in($fixture, $alice_session, array('user_name' => 'alice', 'user_id' => $alice, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $bob_session, array('user_name' => 'bob', 'user_id' => $bob, 'user_logged_in' => 1));
+	$as_alice = mcm_session_headers($alice_session);
+	$as_bob   = mcm_session_headers($bob_session);
+
+	$token        = mcm_tmdb_test_token();
+	$forbidden    = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$unauthorised = '{"error":"authentication_required","message":"You must be signed in to do that."}';
+	$tmdb_list    = '5212934a760ee36af148407c';
+
+	// Everything an import can touch, in one comparable value: which film is in
+	// which list, the shared master list it writes to first, and the lists
+	// themselves - names, ranks and the share flag a link depends on.
+	$state = function () use ($pdo, $alice, $bob) {
+		return array(
+			'movies' => mcm_db_movies_snapshot($pdo),
+			'master' => mcm_db_master_snapshot($pdo),
+			'lists'  => mcm_db_lists_snapshot($pdo),
+			'alice'  => mcm_db_list_state($pdo, $alice),
+			'bob'    => mcm_db_list_state($pdo, $bob),
+		);
+	};
+
+	try {
+		/* Refusals ---------------------------------------------------------- */
+
+		$refusals = array(
+			'an anonymous import' => array(
+				'headers' => array(),
+				'fields'  => array('movie_list_id' => $alice_one, 'tmdb_list_id' => $tmdb_list),
+				'status'  => 401,
+				'body'    => $unauthorised,
+			),
+			"an import into somebody else's list" => array(
+				'headers' => $as_bob,
+				'fields'  => array('movie_list_id' => $alice_one, 'tmdb_list_id' => $tmdb_list),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			'an import into a list nobody has' => array(
+				'headers' => $as_alice,
+				'fields'  => array('movie_list_id' => 4242, 'tmdb_list_id' => $tmdb_list),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			'an import naming a list identifier that is not one' => array(
+				'headers' => $as_alice,
+				'fields'  => array('movie_list_id' => $alice_one . ' OR 1=1', 'tmdb_list_id' => $tmdb_list),
+				'status'  => 403,
+				'body'    => $forbidden,
+			),
+			'an import with a TMDb list id that is not one' => array(
+				'headers' => $as_alice,
+				'fields'  => array('movie_list_id' => $alice_one, 'tmdb_list_id' => '../configuration'),
+				'status'  => 200,
+				'body'    => 'Error: That is not a TMDb list id.',
+			),
+		);
+
+		foreach ($refusals as $description => $case) {
+			$before = call_user_func($state);
+			mcm_tmdb_stub_reset($fixture);
+			$response = mcm_http_post($app, '/import_list.php', $case['fields'], $case['headers']);
+
+			t_same($case['status'], $response['status'], $description . ' is refused');
+			t_same($case['body'], $response['body'], $description . ' gets the answer that refusal always gives');
+			t_same(array(), mcm_tmdb_stub_requests($fixture), $description . ' made no request to TMDb');
+			t_same($before, call_user_func($state), $description . ' changed nothing at all');
+		}
+
+		// A list somebody else owns and a list nobody owns are refused with the
+		// same bytes, so the answer says nothing about whose it is.
+		t_same(
+			$refusals["an import into somebody else's list"]['body'],
+			$refusals['an import into a list nobody has']['body'],
+			"an import into somebody else's list and into nobody's are refused identically"
+		);
+
+		/* The owner's own import -------------------------------------------- */
+
+		$before = call_user_func($state);
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/import_list.php', array(
+			'movie_list_id' => $alice_one,
+			'tmdb_list_id'  => $tmdb_list,
+		), $as_alice);
+		$after = call_user_func($state);
+
+		t_same(200, $response['status'], 'the owner may import into her own list');
+		t_same('greatsuccess', substr($response['body'], 0, 12), 'and is told it worked, in the words the page has always used');
+
+		// Exactly one request left this site, for the list she named, and the
+		// credential travelled in the header rather than the path.
+		$requests = mcm_tmdb_stub_requests($fixture);
+		t_same(1, count($requests), 'an import makes exactly one request to TMDb');
+		t_contains('/list/' . $tmdb_list, isset($requests[0]) ? $requests[0] : '', 'and asks for the TMDb list it was given');
+		t_lacks($token, isset($requests[0]) ? $requests[0] : '', 'the request carries no credential in its URL');
+		t_lacks($token, $response['body'], 'the answer carries no credential');
+		t_lacks($token, $response['log'], 'and neither does the log');
+		t_lacks($base, $response['body'], 'the answer names no upstream URL');
+		t_lacks('upstream-only-marker', $response['body'], 'no unprojected upstream field survives into the answer');
+		t_lacks('stub-payload-marker', $response['body'], 'and none survives at the top level either');
+
+		// Both films of the list are hers now: the one already in the shared
+		// master list and the one that was not.
+		t_same(count($before['movies']) + 2, count($after['movies']), 'both films of the imported list land in one row each');
+		t_contains($alice_one . '|101', implode("\n", $after['movies']), 'the film nobody had lands in the list she named');
+		t_contains($alice_one . '|102', implode("\n", $after['movies']), 'and so does the one Bob already had');
+
+		// The shared master list gained the film nobody had, with the fields the
+		// projection carries and no others.
+		t_same(count($before['master']) + 1, count($after['master']), 'the film nobody had reaches the shared master list');
+		t_contains('101|Movie One|Movie One|/poster101.jpg|1999-10-15', implode("\n", $after['master']), 'and is stored with the details TMDb gave for it');
+		// And the row that was already there was brought up to date rather than
+		// duplicated: that is the update branch of the same loop.
+		t_contains('102|Movie Two|Movie Two|/poster102.jpg|1999-10-15', implode("\n", $after['master']), 'the stale row is updated in place');
+		t_lacks('A Stale Title', implode("\n", $after['master']), 'and the stale details are gone');
+
+		// An import writes films. It does not touch the lists themselves, so a
+		// shared list is still shared and every list keeps its name and rank.
+		t_same($before['lists'], $after['lists'], 'an import leaves the lists themselves alone');
+		t_same($before['alice'], $after['alice'], "and leaves her own lists' names, ranks and sharing exactly as they were");
+
+		// The response contract: 'greatsuccess' and then the collection, as the
+		// browser re-reads it.
+		$db_var = json_decode(substr($response['body'], 12), true);
+		t_ok(is_array($db_var), 'the answer carries the collection as JSON the browser can parse');
+		t_same(2, is_array($db_var) ? count($db_var) : 0, 'both of her lists come back');
+		$imported_into = array();
+		foreach (is_array($db_var) ? $db_var : array() as $list) {
+			if (isset($list['list_id']) && (int) $list['list_id'] === $alice_one) {
+				$imported_into = $list;
+			}
+		}
+		t_same($alice_one, isset($imported_into['list_id']) ? (int) $imported_into['list_id'] : 0, 'the list she imported into is one of them');
+		t_same(2, count(mcm_at($imported_into, 'movie_details', array())), 'and holds both imported films');
+		t_contains('Movie One', $response['body'], 'the answer names the film that was imported');
+
+		/* Duplicates, per account ------------------------------------------- */
+
+		// The same list again, into her other list. She has both films already,
+		// and the duplicate check is scoped to her whole collection rather than
+		// to one list, so this writes nothing - and still costs one request,
+		// because whether a film is a duplicate is only knowable after the list
+		// has been read.
+		$before = call_user_func($state);
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/import_list.php', array(
+			'movie_list_id' => $alice_two,
+			'tmdb_list_id'  => $tmdb_list,
+		), $as_alice);
+
+		t_same('greatsuccess', substr($response['body'], 0, 12), 'importing the same list again still answers as it always did');
+		t_same($before, call_user_func($state), 'and writes nothing she already had');
+		t_same(1, count(mcm_tmdb_stub_requests($fixture)), 'a duplicate import still makes exactly one request');
+
+		/* One account is not another ---------------------------------------- */
+
+		// Bob imports the same TMDb list into his own list. He has one of the
+		// two films already and gets the other: what Alice owns is no reason to
+		// tell him he has anything, which is the whole of the duplicate check's
+		// WHERE clause.
+		$before = call_user_func($state);
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/import_list.php', array(
+			'movie_list_id' => $bob_one,
+			'tmdb_list_id'  => $tmdb_list,
+		), $as_bob);
+		$after = call_user_func($state);
+
+		t_same('greatsuccess', substr($response['body'], 0, 12), 'the other account may import into the list it does own');
+		t_same(count($before['movies']) + 1, count($after['movies']), 'and gets the one film he did not have');
+		t_contains($bob_one . '|101', implode("\n", $after['movies']), 'which lands in his own list');
+		t_same($before['master'], $after['master'], 'a second account importing the same list writes no new master row');
+		t_same($before['alice'], $after['alice'], "and leaves the other account's lists alone");
+		$hers = array();
+		foreach ($after['movies'] as $row) {
+			if (strpos($row, '|' . $alice_one . '|') !== false) {
+				$hers[] = $row;
+			}
+		}
+		t_same(2, count($hers), "her list still holds exactly the two films she imported");
+
+		/* When TMDb cannot be read ------------------------------------------ */
+
+		// The same request, against an endpoint that answers the list path with
+		// a 404. The import fails the way every other failure on this site
+		// fails - the generic message, the reason in the log - and writes
+		// nothing, because nothing is written until there is a list to write.
+		mcm_tmdb_configure($fixture, $db + array(
+			'MCM_TMDB_BASE_URL'  => $base . '/nowhere',
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+		$before = call_user_func($state);
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/import_list.php', array(
+			'movie_list_id' => $alice_one,
+			'tmdb_list_id'  => $tmdb_list,
+		), $as_alice);
+
+		t_same(500, $response['status'], 'an import whose TMDb request fails fails');
+		t_same(mcm_generic_message(), $response['body'], 'and says only the generic thing about it');
+		t_lacks('greatsuccess', $response['body'], 'and does not claim it worked');
+		t_lacks('upstream-body-marker', $response['body'], 'no upstream body reaches the client');
+		t_lacks($token, $response['body'], 'and no credential does either');
+		t_lacks($token, $response['log'], 'nor does one reach the log');
+		t_contains('the list could not be read', $response['log'], 'the reason it failed is in the log instead');
+		t_same($before, call_user_func($state), 'and a failed import writes nothing');
+		t_same(1, count(mcm_tmdb_stub_requests($fixture)), 'a failed import still made only the one request');
+
+		mcm_tmdb_configure($fixture, $db + array(
+			'MCM_TMDB_BASE_URL'  => $base,
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+	} catch (Throwable $error) {
+		// Throwable rather than Exception, and both servers stopped on the way
+		// out: an orphaned built-in server holds its port and the run's own
+		// output pipe, so a harness driving the suite would hang rather than
+		// see it fail.
 		mcm_server_stop($app);
 		mcm_server_stop($stub);
 		throw $error;
