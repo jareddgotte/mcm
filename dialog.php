@@ -8,23 +8,27 @@ require_once(__DIR__ . '/inc/tmdb_proxy.php');
 require_once(__DIR__ . '/inc/dialog_trailers.php');
 
 
-// The wrapper carries the TMDb credential, so it is built for this request and
-// thrown away with it. It used to be kept in $_SESSION, which put the key in
-// the session store on disk for every visitor who ever opened a movie.
-$tmdb = new TMDb(TMDB_API_KEY);
-
 $movie_id = (isset($_POST['id'])) ? $_POST['id'] : ((isset($_GET['id'])) ? $_GET['id'] : '');
 
 //$timeconstruct = microtime(true) - $_SERVER["REQUEST_TIME_FLOAT"];
 
-// Get the tmdb config so we can pass it onto the TMDbDisplay class for images
+// 'configuration', 'movie' and 'videos' are all open to any session, so no
+// login/ownership guard applies here - mcm_tmdb_plan()/mcm_tmdb_run() are the
+// same seam mcm_tmdb_serve() uses, just called directly instead of over HTTP.
+// A refusal or an upstream failure degrades to the projector's own empty
+// shape rather than ending the request, the way the old wrapper's calls never
+// threw either.
 if (!isset($_SESSION['tmdb_config'])) {
-	$_SESSION['tmdb_config'] = $tmdb->getConfiguration();
+	$config_plan = mcm_tmdb_plan('configuration', array());
+	$config_result = (!empty($config_plan['ok'])) ? mcm_tmdb_run($config_plan) : array('ok' => false);
+	$_SESSION['tmdb_config'] = (!empty($config_result['ok'])) ? $config_result['data'] : mcm_tmdb_project_configuration(array());
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];
 
-$movie = $tmdb->getMovie($movie_id);
+$movie_plan = mcm_tmdb_plan('movie', array('movie_id' => $movie_id));
+$movie_result = (!empty($movie_plan['ok'])) ? mcm_tmdb_run($movie_plan) : array('ok' => false);
+$movie = (!empty($movie_result['ok'])) ? $movie_result['data'] : mcm_tmdb_project_movie(array());
 $title = $movie['original_title'];
 $genres = $movie['genres'];
 $imdb = $movie['imdb_id'];
@@ -32,9 +36,6 @@ $overview = $movie['overview'];
 $release_date = $movie['release_date'];
 $runtime = $movie['runtime'];
 
-// 'videos' is open to any session, so no login/ownership guard applies here -
-// mcm_tmdb_plan()/mcm_tmdb_run() are the same seam mcm_tmdb_serve() uses, just
-// called directly instead of over HTTP.
 $videos_plan = mcm_tmdb_plan('videos', array('movie_id' => $movie_id));
 $videos_result = (!empty($videos_plan['ok'])) ? mcm_tmdb_run($videos_plan) : array('ok' => false);
 $video_rows = (!empty($videos_result['ok']) && isset($videos_result['data']['results']))

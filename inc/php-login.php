@@ -35,7 +35,5 @@ include('lang/' . PHPLOGIN_LANG . '.php');
 // load our classes
 require_once('classes/Login.php');
 require_once('classes/Registration.php');
-// This is the library which houses most of the functions I use to communicate with the TMDb database.
-require_once('classes/TMDb.inc'); // https://github.com/glamorous/TMDb-PHP-API
 
 ?>

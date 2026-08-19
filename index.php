@@ -36,6 +36,7 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // mcm_csrf_token() to the browser, which is what lets the requests that page
 // makes carry a token the mutation endpoints will accept.
 require_once(__DIR__ . '/inc/guards.php');
+require_once(__DIR__ . '/inc/tmdb_proxy.php');
 require_once('inc/php-login.php');
 
 $login = new Login();

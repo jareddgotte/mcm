@@ -189,7 +189,6 @@ function mcm_copy_tree($source, $target)
 function mcm_config_php(array $defines = array())
 {
 	$defines += array(
-		'TMDB_API_KEY'      => 'test-api-key',
 		// Fake, and the only credential this suite ever sends. It goes to a
 		// stub on the loopback interface; no case here contacts TMDb.
 		'TMDB_READ_ACCESS_TOKEN' => 'test-tmdb-read-token',

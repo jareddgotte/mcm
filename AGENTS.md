@@ -362,21 +362,33 @@ the application. Setup is documented in `README.md`.
   request; it wants the returned-failure contract because it has a page of its
   own to answer, and a film it cannot resolve is answered `3` and stores
   nothing. `1` and `2` still mean inserted and duplicate.
-- The old vendored wrapper in `inc/classes/TMDb.inc` is still what `dialog.php`
-  and the two views call, and it still holds `TMDB_API_KEY`; it is built per
-  request now rather than kept in `$_SESSION`. `dialog.php` is a partial
-  exception: its trailer accordion moved onto the proxy's `videos` operation,
-  calling `mcm_tmdb_plan()` / `mcm_tmdb_run()` directly - the same seam
-  `mcm_tmdb_execute()` now wraps, safe there only because `videos`' caller
-  policy is `any`. `getConfiguration()` and `getMovie()` in that file are still
-  the old wrapper. Which of a movie's proxied videos are a usable YouTube
-  trailer or teaser, and their order, is `mcm_dialog_usable_trailers()` in
-  `inc/dialog_trailers.php`; the accordion and empty-state markup for that
-  selection is a second pure function beside it, `mcm_dialog_trailer_html()`, so
-  `dialog.php` only calls the two in sequence. Both are pure functions on the
-  same pattern as the projectors, so the suite drives them with hand-built rows
-  in `tests/pages/tmdb_projection.php` rather than a live page. The wrapper and
-  the dead auth-session path are removed after that.
+- The vendored wrapper that used to live at `inc/classes/TMDb.inc`, and
+  `TMDB_API_KEY`, the v3 credential only it read, are gone. `dialog.php`,
+  `inc/views/share.php` and `inc/views/logged_in.php` all reach `configuration`
+  and (`dialog.php` only) `movie` the same way `dialog.php` already reached
+  `videos`: calling `mcm_tmdb_plan()` / `mcm_tmdb_run()` directly rather than
+  through `mcm_tmdb_resolve()` or `mcm_tmdb_execute()` - the seam is safe there
+  only because all three operations' caller policy is `any`, so a refusal or an
+  upstream failure degrades to the projector's own empty shape (e.g.
+  `mcm_tmdb_project_configuration(array())`) instead of ending the request, the
+  way the wrapper's calls never threw either. Which of a movie's proxied videos
+  are a usable YouTube trailer or teaser, and their order, is
+  `mcm_dialog_usable_trailers()` in `inc/dialog_trailers.php`; the accordion and
+  empty-state markup for that selection is a second pure function beside it,
+  `mcm_dialog_trailer_html()`, so `dialog.php` only calls the two in sequence.
+  Both are pure functions on the same pattern as the projectors, so the suite
+  drives them with hand-built rows in `tests/pages/tmdb_projection.php` rather
+  than a live page. The auth-session branch that used to sit in
+  `inc/views/logged_in.php` - reading a request token nothing in the codebase
+  ever set - is gone with the wrapper it called into; `$_SESSION['logged_in']`,
+  the flag that branch alone maintained, was never read anywhere else and is
+  gone with it. `grep -rn "TMDb\b" --include='*.php' .` still matches many
+  lines after all of this: "TMDb" is also this product's own name, used in
+  prose throughout the comments (`inc/tmdb.php`, `inc/tmdb_proxy.php` and
+  elsewhere) as well as in test descriptions, so the grep does not go to zero -
+  only `new TMDb(...)` and the class file itself do, and that is what
+  `tests/cases.php`'s `'the vendored TMDb wrapper and auth-session path are
+  gone'` group checks across every project source file.
 
 ## Database access
 
