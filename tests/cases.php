@@ -3584,15 +3584,14 @@ t_group('import_list.php source checks of last resort', function () {
 	t_ok($ownership < $tmdb_call, 'the ownership check appears before the call to TMDb in import_list.php\'s source');
 
 	// The list comes through the proxy operation and through nothing else. The
-	// vendored wrapper is still in the tree and still used by other pages, so
-	// "this page no longer builds one" is a fact about this page that only its
-	// source can carry.
+	// vendored wrapper is gone from the tree entirely, so "this page never
+	// built one" is now a fact the whole application source can carry, not
+	// just this one file - see 'the vendored wrapper class is gone' below.
 	t_same(0, mcm_count_new($import, 'TMDb'), 'import_list.php does not build the vendored wrapper');
 	// A method call rather than a function call, so it is read off the source
 	// text: mcm_count_calls_in() deliberately skips anything behind "->".
 	t_lacks('getList', $import_source, 'import_list.php does not call the vendored list method');
 	t_same(0, mcm_count_calls($import, 'curl_init'), 'import_list.php speaks no HTTP of its own');
-	t_same(0, mcm_count_constant_reads($import, 'TMDB_API_KEY'), 'import_list.php reads no TMDb credential');
 	t_same(0, mcm_count_constant_reads($import, 'TMDB_READ_ACCESS_TOKEN'), 'import_list.php reads no TMDb read token either');
 	t_same(0, mcm_count_debug_output($import), 'import_list.php dumps nothing into the response');
 
@@ -4715,8 +4714,8 @@ t_group('tmdb credential hygiene in the source', function () {
 	$example = file_get_contents(MCM_REPO_ROOT . '/inc/config/example_config.php');
 	t_contains('TMDB_READ_ACCESS_TOKEN', $example, 'the example configuration documents the read access token');
 	t_ok(strpos($example, 'TMDB_SESSION_ID') === false, 'the example configuration no longer defines the auth-session constant');
+	t_ok(strpos($example, 'TMDB_API_KEY') === false, 'the example configuration no longer defines the vendored wrapper\'s API key');
 	t_matches('#define\("TMDB_READ_ACCESS_TOKEN", "x+"\)#', $example, 'the example read access token is a placeholder');
-	t_matches('#define\("TMDB_API_KEY", "x+"\)#', $example, 'the example API key is still a placeholder');
 
 	// What must be true of the client itself: requiring it is all it takes, and
 	// it declares functions and runs nothing on its own. tmdb.php reaches it
@@ -6411,4 +6410,141 @@ t_group('tmdb proxy source checks of last resort', function () {
 	t_lacks('curl', $source, 'the entry point speaks no HTTP of its own');
 	t_lacks('TMDB_READ_ACCESS_TOKEN', $source, 'the entry point names no credential');
 	t_same(1, mcm_count_calls($entry, 'mcm_tmdb_serve'), 'the entry point serves the request in one call');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * The vendored TMDb wrapper and the dead auth-session path (issue #39)
+ * ---------------------------------------------------------------------------
+ *
+ * inc/classes/TMDb.inc, and the branch in inc/views/logged_in.php that read a
+ * request token nothing in the codebase ever set, are both gone now that
+ * every page that used to build the wrapper reaches TMDb through
+ * inc/tmdb_proxy.php instead - dialog.php, inc/views/share.php and
+ * inc/views/logged_in.php call mcm_tmdb_plan()/mcm_tmdb_run() directly for
+ * 'configuration' and 'movie', the same seam dialog.php already used for
+ * 'videos', because all three operations are open to any session.
+ *
+ * A caveat on the issue's own grep: "TMDb" is also this product's name, and
+ * the project's comments use it in prose throughout inc/tmdb.php,
+ * inc/tmdb_proxy.php and elsewhere - "the TMDb client", "asks TMDb for" and so
+ * on - so `grep -rn "TMDb\b" --include='*.php' .` still matches many lines
+ * after this change; narrowing it to code that actually builds the class,
+ * which is what the issue is about, is what the checks below do instead.
+ */
+
+t_group('the vendored TMDb wrapper and auth-session path are gone', function () {
+	t_ok(!is_file(MCM_REPO_ROOT . '/inc/classes/TMDb.inc'), 'the vendored wrapper file is deleted');
+
+	$sources = mcm_php_sources(MCM_REPO_ROOT);
+	t_ok(count($sources) > 0, 'there are project sources to read');
+
+	foreach ($sources as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		t_same(0, mcm_count_new($file, 'TMDb'), $name . ' does not build the vendored wrapper');
+		t_same(0, mcm_count_constant_reads($file, 'TMDB_API_KEY'), $name . ' reads no v3 API key');
+
+		$source = file_get_contents($file);
+		t_ok(strpos($source, "SESSION['token']") === false, $name . ' holds no reference to the removed request-token session key');
+		t_ok(strpos($source, 'getAuthSession') === false, $name . ' holds no reference to the removed auth-session method, in code or comments');
+	}
+
+	$example = file_get_contents(MCM_REPO_ROOT . '/inc/config/example_config.php');
+	t_ok(strpos($example, 'TMDB_API_KEY') === false, 'the example configuration no longer defines the vendored wrapper\'s v3 API key');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * The application still works with the wrapper gone
+ * ---------------------------------------------------------------------------
+ *
+ * Both groups below drive real pages - dialog.php and the signed-in view -
+ * against tests/pages/tmdb_stub.php exactly as the proxy groups above drive
+ * tmdb.php and import_list.php, and for the same reason: this is what proves
+ * the replacement code path actually answers a request rather than merely
+ * containing no reference to the class that used to.
+ */
+
+t_group('dialog.php renders a movie through a TMDb fixture stub with the wrapper deleted', function () {
+	$fixture = mcm_fixture('dialog-tmdb');
+	$app     = mcm_server_start($fixture);
+	$stub    = mcm_server_start($fixture);
+
+	try {
+		mcm_tmdb_configure($fixture, array(
+			'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+
+		$response = mcm_http($app, '/dialog.php?id=550');
+
+		t_same(200, $response['status'], 'the dialog renders for a movie the stub knows about');
+		t_contains('Fight Club', $response['body'], 'the movie title, from the movie operation, is in the markup');
+		t_contains('tt0137523', $response['body'], 'the IMDb id, from the movie operation, is in the markup');
+		t_contains('BdJKm16Co6M', $response['body'], 'the usable trailer, from the videos operation, is in the markup');
+		t_lacks('stub-payload-marker', $response['body'], 'no unprojected upstream field survives into the markup');
+
+		$requests = mcm_tmdb_stub_requests($fixture);
+		t_ok(in_array('GET /tmdb_stub.php/configuration', $requests, true), 'the dialog fetched the configuration through the proxy');
+		t_ok(in_array('GET /tmdb_stub.php/movie/550', $requests, true), 'the dialog fetched the movie through the proxy');
+		t_ok(in_array('GET /tmdb_stub.php/movie/550/videos', $requests, true), 'the dialog fetched the videos through the proxy');
+	} catch (Throwable $error) {
+		mcm_server_stop($app);
+		mcm_server_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_server_stop($stub);
+});
+
+t_group('the signed-in view renders through a TMDb fixture stub with the wrapper deleted', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		t_skip('the signed-in view rendering case', mcm_db_skip_reason());
+		return;
+	}
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded for the signed-in view rendering case')) {
+		return;
+	}
+
+	$pdo   = mcm_db_reset_collection($server);
+	$alice = mcm_db_seed_user($pdo, 'alice', 'p' . bin2hex(random_bytes(6)));
+	mcm_db_seed_list($pdo, $alice, 'alice one', 0);
+
+	$fixture = mcm_db_fixture('signed-in-view-tmdb', $server);
+	$app     = mcm_server_start($fixture);
+	$stub    = mcm_server_start($fixture);
+
+	try {
+		mcm_tmdb_configure($fixture, array(
+			'DB_HOST'            => mcm_db_host_setting($server),
+			'DB_NAME'            => $server['database'],
+			'DB_USER'            => $server['user'],
+			'DB_PASS'            => $server['password'],
+			'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+
+		$alice_session = 'e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3';
+		mcm_seed_signed_in($fixture, $alice_session, array('user_name' => 'alice', 'user_id' => $alice, 'user_logged_in' => 1));
+		$as_alice = mcm_session_headers($alice_session);
+
+		$first = mcm_http($app, '/index.php', $as_alice);
+		t_same(200, $first['status'], 'the signed-in view renders with the wrapper gone');
+		t_contains('alice one', $first['body'], "the visitor's own list still renders");
+		t_contains('image.tmdb.org', $first['body'], 'the poster base URL, from the configuration operation, reaches the page');
+		t_lacks('stub-payload-marker', $first['body'], 'no unprojected upstream field survives into the page');
+		t_same(1, count(mcm_tmdb_stub_requests($fixture)), 'the first load fetches the configuration exactly once');
+
+		mcm_tmdb_stub_reset($fixture);
+		$second = mcm_http($app, '/index.php', $as_alice);
+		t_same(200, $second['status'], 'a second load in the same session still renders');
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'a second load in the same session reuses the cached configuration and asks TMDb nothing');
+	} catch (Throwable $error) {
+		mcm_server_stop($app);
+		mcm_server_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_server_stop($stub);
 });

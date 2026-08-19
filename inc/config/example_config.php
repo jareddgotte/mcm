@@ -14,14 +14,12 @@ if (!defined('MCM_BOOTSTRAP')) {
 /**
  * Configuration for: The Movie Database (TMDb)
  *
- * Both values below are credentials and both are backend-only: nothing here is
- * ever rendered into a page, put in a URL, kept in a session or handed to a
- * browser. Placeholders only in this file - your real values belong in
- * config.php, which is not in the repository.
+ * The value below is a credential and is backend-only: it is never rendered
+ * into a page, put in a URL, kept in a session or handed to a browser.
+ * Placeholder only in this file - your real value belongs in config.php,
+ * which is not in the repository.
  */
 
-/** the v3 API key the older vendored wrapper still uses. */
-define("TMDB_API_KEY", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This key comes from TMDB
 /** the v4 read access token inc/tmdb.php sends as "Authorization: Bearer ...". */
 define("TMDB_READ_ACCESS_TOKEN", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"); // This token comes from TMDB
 

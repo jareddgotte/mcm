@@ -3,38 +3,21 @@
 header("Cache-Control: no-cache, must-revalidate"); // HTTP/1.1
 header("Expires: Sat, 26 Jul 1997 05:00:00 GMT"); // Date in the past
 
-// I primarily use sessions to reduce the amount of calls I make to TMDb, as well as maintaining a session
-// with TMDb so I can move movies from one list to another
+// I primarily use sessions to reduce the amount of calls I make to TMDb
 // (the session itself is started by inc/bootstrap.php)
 
 if (!isset($_SESSION['db_lists'])) $_SESSION['db_lists'] = $db_lists;
 
-// The wrapper holds the TMDb credential, so it lives for this request only.
-// What is worth keeping across requests is its answer, not the object: the
-// configuration below is still fetched once per session.
-$tmdb = new TMDb(TMDB_API_KEY);
-
-// This token will only be set in the login page
-if (isset($_SESSION['token'])) {
-	if (!isset($_SESSION['session'])) { // Make sure we don't request multiple sessions
-		$session = $tmdb->getAuthSession($_SESSION['token']['request_token']);
-		if (isset($session['status_code'])) {
-			if ($session['status_code'] == 17) { // 17 means "Session denied"
-				$_SESSION['logged_in'] = FALSE; // This variable lets the functions below know if we're logged in or not
-			}
-		}
-		else { // If I authorized properly, the following happens
-			$_SESSION['session'] = $session['session_id'];
-			$_SESSION['logged_in'] = TRUE;
-		}
-	}
-	else $_SESSION['logged_in'] = TRUE;
-}
-else $_SESSION['logged_in'] = FALSE;
-
-// Get the tmdb config so we can pass it onto the TMDbDisplay class for images
+// The configuration operation is open to any session, so
+// mcm_tmdb_plan()/mcm_tmdb_run() are called directly rather than through
+// mcm_tmdb_resolve(). What is worth keeping across requests is the answer,
+// not a client: it is still fetched once per session. A refusal or an
+// upstream failure degrades to the projector's own empty shape rather than
+// ending the request.
 if (!isset($_SESSION['tmdb_config'])) {
-	$_SESSION['tmdb_config'] = $tmdb->getConfiguration();
+	$config_plan = mcm_tmdb_plan('configuration', array());
+	$config_result = (!empty($config_plan['ok'])) ? mcm_tmdb_run($config_plan) : array('ok' => false);
+	$_SESSION['tmdb_config'] = (!empty($config_result['ok'])) ? $config_result['data'] : mcm_tmdb_project_configuration(array());
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];

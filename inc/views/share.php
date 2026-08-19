@@ -2,14 +2,16 @@
 
 if (!isset($_SESSION['db_lists'])) $_SESSION['db_lists'] = $db_lists;
 
-// The wrapper holds the TMDb credential, so it lives for this request only.
-// What is worth keeping across requests is its answer, not the object: the
-// configuration below is still fetched once per session.
-$tmdb = new TMDb(TMDB_API_KEY);
-
-// Get the tmdb config so we can pass it onto the TMDbDisplay class for images
+// The configuration operation is open to any session - the public sharing
+// page is not signed in - so mcm_tmdb_plan()/mcm_tmdb_run() are called
+// directly rather than through mcm_tmdb_resolve(). What is worth keeping
+// across requests is the answer, not a client: it is still fetched once per
+// session. A refusal or an upstream failure degrades to the projector's own
+// empty shape rather than ending the request.
 if (!isset($_SESSION['tmdb_config'])) {
-	$_SESSION['tmdb_config'] = $tmdb->getConfiguration();
+	$config_plan = mcm_tmdb_plan('configuration', array());
+	$config_result = (!empty($config_plan['ok'])) ? mcm_tmdb_run($config_plan) : array('ok' => false);
+	$_SESSION['tmdb_config'] = (!empty($config_result['ok'])) ? $config_result['data'] : mcm_tmdb_project_configuration(array());
 }
 $base_url = $_SESSION['tmdb_config']['images']['base_url'];
 $poster_size =  $_SESSION['tmdb_config']['images']['poster_sizes'][2];
