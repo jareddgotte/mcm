@@ -89,9 +89,13 @@ the application. Setup is documented in `README.md`.
   Ownership is a question about rows, so a refusal is asserted twice: what the
   client was told, and a before/after snapshot of every table
   (`mcm_db_movies_snapshot()` and friends) proving the refusal wrote nothing.
-  What no case covers is a successful import - that path calls TMDb over the
-  network, which the suite does not do; its refusals happen earlier and are
-  covered.
+  It runs a TMDb stub on a second server because `add_movie.php` looks a film
+  up; a fixture there without `MCM_TMDB_BASE_URL` would reach the real TMDb.
+  `add_movie resolves its own metadata over a real database` is where what gets
+  stored is taken apart - a fabricated title served and stored nowhere, a
+  refusal costing no outbound call, the update path, and an outage. What no case
+  covers is a successful import - that path calls TMDb over the network, which
+  the suite does not do; its refusals happen earlier and are covered.
 - Server lifecycle is the sharp edge, because its failure mode is a hang rather
   than a failure. `proc_close()` waits for the child, so calling it on a server
   that ignored SIGTERM never returns; `mcm_db_stop_server()` therefore signals,
@@ -156,6 +160,14 @@ the application. Setup is documented in `README.md`.
 - Escaping is rendering only. Stored values keep the exact bytes that were
   submitted, and `mcm_list_name_error()` rejects a bad list name rather than
   rewriting it, so a name that already contains markup keeps working.
+- What a browser script may name is read off its string literals, not its raw
+  text: `mcm_js_absolute_urls()` fails a script that names any host of its own,
+  `mcm_js_object_property()` reads one object-valued property, and
+  `mcm_js_ajax_calls()` reports each call's URL, method and the field names it
+  sends. That is how "the search is same-origin and the add names only two
+  fields" is asserted without a browser; the server half of the same claim is
+  the database group above, which is what actually proves nothing else can be
+  stored.
 - The browser has the same duty for what it renders after the page loads, and
   `js/dom.js` is where it discharges it: the page scripts build elements and
   assign a value as text or as an attribute instead of concatenating it into
@@ -210,8 +222,10 @@ the application. Setup is documented in `README.md`.
 - `js/mc.js` attaches it in one `$.ajaxPrefilter`, as the `X-CSRF-Token` header
   that `MCM_CSRF_HEADER` reads. Whether a request leaves this site is jQuery's
   own answer - it resolves the URL and compares scheme, host and port before any
-  prefilter runs - so the type-ahead's search of TMDb carries no token. Do not
-  re-derive that from the URL here: a pattern in a browser script is also the
+  prefilter runs - and the prefilter reads that answer rather than the URL. No
+  request the page makes leaves this site any more, so nothing depends on it
+  today; it stays because the next request somebody adds is what it is for. Do
+  not re-derive it from the URL here: a pattern in a browser script is also the
   one construct `mcm_js_markers()` cannot read.
 - The php-login flows - sign-in, sign-out, registration, password reset - are a
   separate surface. They are handled by the `Login` and `Registration` classes
@@ -231,8 +245,8 @@ the application. Setup is documented in `README.md`.
 
 - `inc/tmdb.php` is the first-party, backend-only TMDb client and the only
   place a TMDb credential is read. It is loaded on demand rather than by the
-  bootstrap, and nothing loads it yet - the proxy entry point that will is a
-  later issue. The credential is `TMDB_READ_ACCESS_TOKEN` and it only ever
+  bootstrap, through `inc/tmdb_proxy.php`, which `tmdb.php` and `add_movie.php`
+  both require. The credential is `TMDB_READ_ACCESS_TOKEN` and it only ever
   appears in an `Authorization: Bearer` header on a handle built and closed
   inside one call: never in a URL, a session, a page, a script or the log.
 - `mcm_tmdb_transport_options()` is deliberately a pure function returning the
@@ -308,30 +322,61 @@ the application. Setup is documented in `README.md`.
   a refusal where an answer was expected is a failing assertion instead of a
   TypeError; and catch `Throwable`, not `Exception`, in a group that has to stop
   a server on the way out.
-- `import_list.php` is the first page on the proxy and the only caller that
-  reaches it without HTTP. It settles the method, the session, the token, the
-  shape of the TMDb list identifier and the local list's ownership itself, and
-  only then calls `mcm_tmdb_resolve('list', ...)` with the connection it opened
-  for its own writes. The TMDb list identifier is the one value a person typed,
-  so a bad one gets its own bounded sentence the way a bad list name does,
-  rather than a catalogue refusal; an upstream failure is `mcm_fail()`, with
-  the category in the log and the generic message to the visitor.
+- Everything in this site that reaches TMDb now goes through the proxy, by two
+  doors, and which door a caller uses is decided by who has already asked the
+  policy questions. `js/mc.js` searches over HTTP - same-origin, with the
+  operation named in the URL - so no browser-served script names a TMDb host or
+  a key and `git grep -nE "api_key|themoviedb" -- js/` is empty.
+  `import_list.php` and `add_movie.php` call in from this process rather than
+  making an HTTP request to this site's own server.
+- The two in-process entry points are not the same call, and the difference is
+  what a refusal does. `mcm_tmdb_resolve()` is the whole policy in order -
+  operation, session, values, ownership, then TMDb - and a refusal ends the
+  request there with the bounded body from `inc/guards.php`.
+  `mcm_tmdb_execute()` is the execution half alone: it plans and runs, names no
+  policy, and hands every failure back as a value. A caller that has not already
+  settled who is asking must use `mcm_tmdb_resolve()`, which will settle it.
+  Both end at `mcm_tmdb_run()`, which stays the one place an operation is
+  executed and the only path to `inc/tmdb.php`.
+  `mcm_tmdb_execute_callers()` in `tests/entrypoints.php` is the written-down
+  list of who may call the execution half, and a page that starts calling it
+  without being added there fails the suite - which is what keeps "I already
+  have guards" from becoming something a page may simply assert.
+- `import_list.php` is the first page on the proxy and reaches it without HTTP.
+  It settles the method, the session, the token, the shape of the TMDb list
+  identifier and the local list's ownership itself, and only then calls
+  `mcm_tmdb_resolve('list', ...)` with the connection it opened for its own
+  writes - the policy is asked again there, because the caller policy belongs to
+  the operation and is not something a page may assert on its behalf. The TMDb
+  list identifier is the one value a person typed, so a bad one gets its own
+  bounded sentence the way a bad list name does, rather than a catalogue
+  refusal; an upstream failure is `mcm_fail()`, with the category in the log and
+  the generic message to the visitor.
+- `add_movie.php` takes a list identifier and a film identifier and nothing
+  else. The four descriptive fields a request used to carry are read nowhere,
+  so they are ignored rather than refused - a browser holding a cached copy of
+  the old script keeps working and still cannot describe a film - and what is
+  stored is the movie projection, each value through `mcm_column_text()` to the
+  width of the column that holds it. The lookup is `mcm_tmdb_execute()` and it
+  happens after `mcm_require_list_owner()`, so a refusal costs no outbound
+  request; it wants the returned-failure contract because it has a page of its
+  own to answer, and a film it cannot resolve is answered `3` and stores
+  nothing. `1` and `2` still mean inserted and duplicate.
 - The old vendored wrapper in `inc/classes/TMDb.inc` is still what `dialog.php`
   and the two views call, and it still holds `TMDB_API_KEY`; it is built per
   request now rather than kept in `$_SESSION`. `dialog.php` is a partial
   exception: its trailer accordion moved onto the proxy's `videos` operation,
   calling `mcm_tmdb_plan()` / `mcm_tmdb_run()` directly - the same seam
-  `mcm_tmdb_serve()` uses, minus the HTTP hop, safe there only because
-  `videos`' caller policy is `any`. `getConfiguration()` and `getMovie()` in
-  that file are still the old wrapper. Which of a movie's proxied videos are a
-  usable YouTube trailer or teaser, and their order, is
-  `mcm_dialog_usable_trailers()` in `inc/dialog_trailers.php`; the accordion
-  and empty-state markup for that selection is a second pure function beside
-  it, `mcm_dialog_trailer_html()`, so `dialog.php` only calls the two in
-  sequence. Both are pure functions on the same pattern as the projectors, so
-  the suite drives them with hand-built rows in `tests/pages/tmdb_projection.php`
-  rather than a live page. Search is moved onto the proxy by a later issue, and
-  the wrapper and the dead auth-session path are removed after that.
+  `mcm_tmdb_execute()` now wraps, safe there only because `videos`' caller
+  policy is `any`. `getConfiguration()` and `getMovie()` in that file are still
+  the old wrapper. Which of a movie's proxied videos are a usable YouTube
+  trailer or teaser, and their order, is `mcm_dialog_usable_trailers()` in
+  `inc/dialog_trailers.php`; the accordion and empty-state markup for that
+  selection is a second pure function beside it, `mcm_dialog_trailer_html()`, so
+  `dialog.php` only calls the two in sequence. Both are pure functions on the
+  same pattern as the projectors, so the suite drives them with hand-built rows
+  in `tests/pages/tmdb_projection.php` rather than a live page. The wrapper and
+  the dead auth-session path are removed after that.
 
 ## Database access
 

@@ -2037,15 +2037,17 @@ t_group('the csrf token reaches the browser and stays inside this site', functio
 		t_lacks('//', $url, $url . ' names no host of its own either');
 	}
 
-	// The outside address, read out of the file rather than written out again
-	// here: it is the one call this page makes that must not carry a token.
-	$remote = '';
-	if (preg_match('/url:\s*\'((?:https?:|\/\/)[^\']+)\'/', $source, $match) === 1) {
-		$remote = $match[1];
-	}
-	t_ok($remote !== '', 'js/mc.js names an address outside this site');
-	t_contains('://', $remote, 'and names its scheme and host in full, so jQuery classifies it as leaving this site');
-	t_lacks($remote, $prefilter, 'the prefilter does not special-case that one address');
+	// And there is no outside address left in the file for that answer to have
+	// to be right about. The type-ahead's search used to name TMDb's host, with
+	// this site's credential in its query string; it names tmdb.php now, so
+	// every request this page makes - the ones $.ajax() makes and the one the
+	// type-ahead's own transport makes - resolves to this origin. Read off the
+	// file's string literals rather than written out again here: any literal
+	// naming a host at all fails this.
+	t_same(array(), mcm_js_absolute_urls($script), 'js/mc.js names no address outside this site');
+	// The prefilter still consults crossDomain rather than trusting that, which
+	// is what keeps the next request somebody adds covered.
+	t_lacks('themoviedb', $prefilter, 'the prefilter special-cases no address of its own');
 });
 
 /*
@@ -3151,6 +3153,35 @@ t_group('list name validation', function () {
  * ---------------------------------------------------------------------------
  */
 
+t_group('a stored value fits the column that holds it', function () {
+	// mcm_column_text() is the one thing that happens to a value this server
+	// looked up before it is written to a varchar(255). A cut by the byte would
+	// pass every other case in this suite - the stored row would still be
+	// shorter than the column - and would still leave a title split through the
+	// middle of a character, so this is where that is asked.
+	$fixture = mcm_fixture('column-text');
+	$report  = mcm_report(mcm_cli($fixture, 'column_text.php')['stdout']);
+	$at      = function ($key) use ($report) {
+		return isset($report[$key]) ? $report[$key] : '(absent)';
+	};
+
+	t_same('10', $at('short_bytes'), 'a value that already fits is left alone');
+	t_same('255', $at('exactly_bytes'), 'a value of exactly the column width is left alone');
+	t_same('255', $at('longer_bytes'), 'a longer value is cut to the column width');
+	t_same('255', $at('longer_chars'), 'and it is 255 characters that are kept');
+
+	// The two that say the cut is by the character rather than by the byte.
+	t_same('255', $at('longer_mb_chars'), 'a long multi-byte value keeps 255 characters');
+	t_same('510', $at('longer_mb_bytes'), 'which is more than 255 bytes, and that is the point');
+	t_same('yes', $at('longer_mb_valid'), 'and what is kept is still valid UTF-8');
+	t_same('256', $at('boundary_mb_bytes'), 'a value inside the limit by character is not cut for being outside it by byte');
+	t_same('yes', $at('boundary_mb_valid'), 'so its last character survives whole');
+
+	// And the one that cannot be counted by character is still bounded.
+	t_same('255', $at('invalid_utf8_bytes'), 'a value that is not valid UTF-8 is cut by the byte instead');
+	t_same('0', $at('not_a_string_bytes'), 'a value that is not text at all becomes an empty one');
+});
+
 t_group('security headers', function () {
 	/* The default fixture, over the wire ---------------------------------------- */
 
@@ -3189,7 +3220,12 @@ t_group('security headers', function () {
 		// would report on every page view and say nothing worth reading.
 		t_contains('ajax.googleapis.com', $policy, 'the policy names the script host the markup loads jQuery from');
 		t_contains('netdna.bootstrapcdn.com', $policy, 'the policy names the host the markup loads Bootstrap from');
-		t_contains('api.themoviedb.org', $policy, 'the policy names the search endpoint the type-ahead calls');
+		// And what they no longer load. The type-ahead used to search TMDb from
+		// the browser, so this line named that host; the search is a request to
+		// this site now, and the policy has to say so or it stops describing
+		// the pages it is sent with.
+		t_contains("connect-src 'self'", $policy, 'the policy allows requests to this origin');
+		t_lacks('api.themoviedb.org', $policy, 'and names no movie database host, because no page asks one anything');
 		t_contains('www.youtube.com', $policy, 'the policy names the video host the trailer dialog frames');
 		t_contains("'unsafe-inline'", $policy, 'the policy admits the inline blocks the views are built out of');
 		// Both of these describe something the site does today rather than
@@ -3599,6 +3635,21 @@ t_group('movie ownership over a real database', function () {
 	$fixture = mcm_db_fixture('movie-ownership', $server);
 	$pdo     = mcm_db_reset_collection($server);
 
+	// add_movie.php looks a film up before it stores one, so this fixture needs
+	// a far end for that lookup as well as a database. The stub gets a server of
+	// its own for the reason the proxy groups give: PHP's built-in server
+	// answers one request at a time, so a page reaching a stub on its own server
+	// would wait for itself.
+	$stub = mcm_server_start($fixture);
+	mcm_tmdb_configure($fixture, array(
+		'DB_HOST'            => mcm_db_host_setting($server),
+		'DB_NAME'            => $server['database'],
+		'DB_USER'            => $server['user'],
+		'DB_PASS'            => $server['password'],
+		'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+		'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+	));
+
 	// Two accounts with lists of their own, and one film each to start with.
 	$alice = mcm_db_seed_user($pdo, 'alice', 'p' . bin2hex(random_bytes(6)));
 	$bob   = mcm_db_seed_user($pdo, 'bob', 'p' . bin2hex(random_bytes(6)));
@@ -3643,7 +3694,11 @@ t_group('movie ownership over a real database', function () {
 		/* Adding ------------------------------------------------------------ */
 
 		// A film nobody has yet, so an add that got through would be visible in
-		// the shared master list as well as in the movies table.
+		// the shared master list as well as in the movies table. The four
+		// descriptive fields are what a request used to be believed about and
+		// are now read nowhere; they stay in every request below so that the
+		// refusals are refusals of a complete request, and so that the one
+		// permitted add proves what happens to them.
 		$new_film = array(
 			'tmdb_movie_id'       => 103,
 			'tmdb_title'          => 'Movie Three',
@@ -3700,6 +3755,10 @@ t_group('movie ownership over a real database', function () {
 		t_same(count($before['movies']) + 1, count(call_user_func($state)['movies']), 'the film lands in exactly one row');
 		t_same(count($before['master']) + 1, count(call_user_func($state)['master']), 'a film nobody had reaches the shared master list');
 		t_contains($alice_two . '|103', implode("\n", mcm_db_movies_snapshot($pdo)), 'the film lands in the list she named');
+		// And what landed is the film the server looked up, not the one the
+		// request described. The group below is where that is taken apart; here
+		// it only has to be true of the ordinary path.
+		t_lacks('Movie Three', implode("\n", mcm_db_master_snapshot($pdo)), 'the title the request supplied is stored nowhere');
 
 		// The same film again is a duplicate, and is reported as one.
 		$before   = call_user_func($state);
@@ -3872,10 +3931,254 @@ t_group('movie ownership over a real database', function () {
 		t_same(200, $response['status'], 'the owner is not refused an import into her own list');
 		t_same('Error: No import list id given.', $response['body'], "the owner reaches the page's own check");
 		t_same($before, call_user_func($state), 'a request that stops on that check writes nothing');
-	} catch (Exception $exception) {
-		t_ok(false, 'the movie ownership cases ran', $exception->getMessage());
+	} catch (Throwable $error) {
+		// Throwable rather than Exception, and both servers stopped on the way
+		// out: a group holding a server that dies on an Error leaves it
+		// orphaned, holding its port and this run's output pipe, so the suite
+		// hangs instead of failing.
+		mcm_server_stop($server_handle);
+		mcm_server_stop($stub);
+		throw $error;
 	}
 	mcm_server_stop($server_handle);
+	mcm_server_stop($stub);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * 25a. What add_movie.php stores, and where it got it
+ * ---------------------------------------------------------------------------
+ *
+ * Issue #36 moved the description of a film out of the request and into the
+ * server. A request now names a list and a film; everything else about that
+ * film is looked up here, through the same operation, the same validation and
+ * the same projection tmdb.php serves a browser with.
+ *
+ * "Cannot be stored" is a claim about rows, so every case below reads the rows.
+ * A request carrying a fabricated title is not refused - it is served, and the
+ * title it carried is nowhere in the table afterwards - which is a stronger
+ * thing to be able to say than a refusal would be, and is also what leaves a
+ * browser holding a cached copy of the old script still able to add a film.
+ *
+ * The far end is tests/pages/tmdb_stub.php, on a server of its own, with the
+ * fixture's fake credential: nothing here contacts TMDb. Counting what actually
+ * went out is the stub's own request log, which is how "a refusal costs no
+ * outbound request" is checked at all.
+ */
+
+t_group('add_movie resolves its own metadata over a real database', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		t_skip('the add_movie metadata cases', mcm_db_skip_reason());
+		return;
+	}
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded for the add_movie metadata cases')) {
+		return;
+	}
+
+	$pdo   = mcm_db_reset_collection($server);
+	$alice = mcm_db_seed_user($pdo, 'alice', 'p' . bin2hex(random_bytes(6)));
+	$bob   = mcm_db_seed_user($pdo, 'bob', 'p' . bin2hex(random_bytes(6)));
+	$alice_list = mcm_db_seed_list($pdo, $alice, 'alice one', 0);
+	$bob_list   = mcm_db_seed_list($pdo, $bob, 'bob one', 0);
+
+	$fixture = mcm_db_fixture('add-movie-metadata', $server);
+	$app     = mcm_server_start($fixture);
+	$stub    = mcm_server_start($fixture);
+
+	// Two servers, for the reason every proxy group here needs two: the
+	// built-in server answers one request at a time, so a page reaching a stub
+	// on its own server would wait for itself.
+	$configure = function (array $extra = array()) use ($fixture, $server, $stub) {
+		mcm_tmdb_configure($fixture, $extra + array(
+			'DB_HOST'            => mcm_db_host_setting($server),
+			'DB_NAME'            => $server['database'],
+			'DB_USER'            => $server['user'],
+			'DB_PASS'            => $server['password'],
+			'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+	};
+	$configure();
+
+	$alice_session = 'd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1';
+	$bob_session   = 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2';
+	mcm_seed_signed_in($fixture, $alice_session, array('user_name' => 'alice', 'user_id' => $alice, 'user_logged_in' => 1));
+	mcm_seed_signed_in($fixture, $bob_session, array('user_name' => 'bob', 'user_id' => $bob, 'user_logged_in' => 1));
+	$as_alice = mcm_session_headers($alice_session);
+	$as_bob   = mcm_session_headers($bob_session);
+
+	$forbidden = '{"error":"forbidden","message":"You are not allowed to do that."}';
+	$bad       = '{"error":"bad_request","message":"The request could not be processed."}';
+
+	// Everything a request would have to be believed about to get any of this
+	// stored. One marker runs through all of it, so a single t_lacks() over a
+	// whole snapshot covers every field at once.
+	$fabricated = array(
+		'tmdb_title'          => 'Fabricated Title fabricated-marker',
+		'tmdb_original_title' => 'Fabricated Original fabricated-marker',
+		'tmdb_poster_path'    => '/fabricated-marker.jpg',
+		'tmdb_release_date'   => '1900-01-01',
+		// Not a field this endpoint ever took, and not one it takes now.
+		'overview'            => 'fabricated-marker overview',
+	);
+
+	$state = function () use ($pdo) {
+		return array(
+			'movies' => mcm_db_movies_snapshot($pdo),
+			'master' => mcm_db_master_snapshot($pdo),
+			'lists'  => mcm_db_lists_snapshot($pdo),
+		);
+	};
+	$master_row = function ($id) use ($pdo) {
+		foreach (mcm_db_master_snapshot($pdo) as $row) {
+			if (strpos($row, $id . '|') === 0) {
+				return $row;
+			}
+		}
+		return '';
+	};
+
+	try {
+		/* 1. The film that gets stored is the one the server looked up ------ */
+
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 550,
+		) + $fabricated, $as_alice);
+
+		t_same(200, $response['status'], 'an add carrying a made-up description is served');
+		t_same('1', $response['body'], 'and answers what a successful add has always answered');
+		// The stub answers /movie/<id> with this, and these four fields are the
+		// whole of the movie operation's projection.
+		t_same('550|Fight Club|Fight Club|/poster550.jpg|1999-10-15', $master_row(550), 'the stored row is the description the server resolved');
+		t_lacks('fabricated-marker', implode("\n", mcm_db_master_snapshot($pdo)), 'no value the request supplied is stored anywhere');
+		t_lacks('1900-01-01', implode("\n", mcm_db_master_snapshot($pdo)), 'not even the release date it supplied');
+		t_contains($alice_list . '|550', implode("\n", mcm_db_movies_snapshot($pdo)), 'and the film lands in the list the request named');
+
+		$requests = mcm_tmdb_stub_requests($fixture);
+		t_same(1, count($requests), 'a served add makes exactly one outbound request');
+		t_contains('/movie/550', isset($requests[0]) ? $requests[0] : '', 'and asks for the film it was given, by identifier');
+		t_lacks('fabricated-marker', implode("\n", $requests), 'nothing the request supplied reaches the movie database either');
+		t_lacks(mcm_tmdb_test_token(), $response['body'], 'the answer carries no credential');
+
+		/* 2. A refusal still costs nothing --------------------------------- */
+
+		$before = $state();
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 551,
+		) + $fabricated, $as_bob);
+
+		t_same(403, $response['status'], "an add to somebody else's list is refused");
+		t_same($forbidden, $response['body'], 'and gets the shared fixed body');
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'a refused add makes no outbound request: the list is settled first');
+		t_same($before, $state(), 'and changes nothing at all');
+
+		/* 3. A film identifier that is not one ------------------------------ */
+
+		$before = $state();
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => '550 OR 1=1',
+		) + $fabricated, $as_alice);
+
+		t_same(400, $response['status'], 'a film identifier that is not a positive integer is refused');
+		t_same($bad, $response['body'], 'and gets the shared fixed body');
+		t_same(array(), mcm_tmdb_stub_requests($fixture), 'a value that could have become a path segment never leaves this site');
+		t_same($before, $state(), 'and nothing is written');
+
+		/* 4. Duplicate detection is still this account's own ---------------- */
+
+		$before   = $state();
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 550,
+		) + $fabricated, $as_alice);
+
+		t_same('2', $response['body'], 'a film already in her collection still reports as a duplicate');
+		t_same($before, $state(), 'and writes nothing, the resolved description being the one already stored');
+
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $bob_list,
+			'tmdb_movie_id' => 550,
+		) + $fabricated, $as_bob);
+
+		t_same('1', $response['body'], "another account's copy of the same film is not this account's duplicate");
+		t_contains($bob_list . '|550', implode("\n", mcm_db_movies_snapshot($pdo)), 'and it lands in his own list');
+
+		/* 5. The update path stores resolved values too --------------------- */
+
+		// A master row that says something else about a film - what an add
+		// before this change could have written - is corrected by the lookup
+		// rather than by the request.
+		mcm_db_seed_master_movie($pdo, 552, 'Stale Title fabricated-marker', '1901-01-01');
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 552,
+		) + $fabricated, $as_alice);
+
+		t_same('1', $response['body'], 'a film already in the shared master list can still be added to a collection');
+		t_same('552|Fight Club|Fight Club|/poster552.jpg|1999-10-15', $master_row(552), 'and the stale row is corrected to what the server resolved');
+		t_lacks('fabricated-marker', implode("\n", mcm_db_master_snapshot($pdo)), 'the update path stores nothing the request supplied either');
+
+		/* 6. A film the movie database will not describe -------------------- */
+
+		// The stub answers /movie/404 with a 404, which is a completed response
+		// this site will not act on.
+		$before = $state();
+		mcm_tmdb_stub_reset($fixture);
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 404,
+		) + $fabricated, $as_alice);
+
+		t_same(200, $response['status'], 'an add for a film the movie database will not describe is answered');
+		t_same('3', $response['body'], 'and says so with a code of its own rather than claiming it worked');
+		t_same($before, $state(), 'and stores nothing at all - not even the identifier');
+		t_contains('could not describe movie 404', $response['log'], 'the reason is in the log');
+		t_lacks('upstream-body-marker', $response['log'], 'and the upstream body is not');
+
+		/* 7. And when the movie database cannot be reached ------------------ */
+
+		// Port 1 is privileged, so nothing can be listening on it: the request
+		// is refused at the socket exactly as it would be during an outage. It
+		// is still a loopback address, so the client's own rule about plaintext
+		// endpoints is not what answers this.
+		$configure(array('MCM_TMDB_BASE_URL' => 'http://127.0.0.1:1/tmdb_stub.php'));
+		$before   = $state();
+		$response = mcm_http_post($app, '/add_movie.php', array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 553,
+		) + $fabricated, $as_alice);
+
+		t_same('3', $response['body'], 'an add during an outage is not claimed to have worked');
+		t_same($before, $state(), 'and writes nothing, so a film with no description is never stored');
+		t_lacks('fabricated-marker', $response['log'], 'nor is what the request said about it written to the log');
+		t_lacks(mcm_tmdb_test_token(), $response['log'], 'and no credential is either');
+		$configure();
+
+		/* 8. The page reads none of this from a query string ---------------- */
+
+		$before   = $state();
+		$response = mcm_http($app, '/add_movie.php?' . http_build_query(array(
+			'movie_list_id' => $alice_list,
+			'tmdb_movie_id' => 554,
+		) + $fabricated), $as_alice);
+
+		t_same(405, $response['status'], 'the same add as a GET is refused on the method alone');
+		t_same($before, $state(), 'and writes nothing');
+	} catch (Throwable $error) {
+		mcm_server_stop($app);
+		mcm_server_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_server_stop($stub);
 });
 
 /*
@@ -4415,16 +4718,84 @@ t_group('tmdb credential hygiene in the source', function () {
 	t_matches('#define\("TMDB_READ_ACCESS_TOKEN", "x+"\)#', $example, 'the example read access token is a placeholder');
 	t_matches('#define\("TMDB_API_KEY", "x+"\)#', $example, 'the example API key is still a placeholder');
 
-	// The client is loaded by nothing yet, and that is deliberate: the entry
-	// point that uses it is separate work. What must be true today is that
-	// requiring it is all it takes, and that it declares functions and runs
-	// nothing on its own.
+	// What must be true of the client itself: requiring it is all it takes, and
+	// it declares functions and runs nothing on its own. tmdb.php reaches it
+	// through inc/tmdb_proxy.php, and so, since issue #36, does add_movie.php.
 	$client = MCM_REPO_ROOT . '/inc/tmdb.php';
 	t_ok(is_readable($client), 'the client file is there to be included');
 	t_same(0, mcm_count_debug_output($client), 'the client dumps nothing into the response');
 	t_same(0, mcm_count_new($client, 'TMDb'), 'the client does not build the old vendored wrapper');
 	t_same(1, mcm_count_calls($client, 'curl_init'), 'the client opens exactly one handle, in one place');
 	t_same(1, mcm_count_calls($client, 'curl_close'), 'the handle holding the credential is closed again');
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * The browser's half of the same question
+ * ---------------------------------------------------------------------------
+ *
+ * The credential used to be in js/mc.js, in the URL the type-ahead searched. It
+ * is not any more, and there is no browser here to watch a search happen in, so
+ * what follows reads the file - narrowly, off the construct in question, the way
+ * every other browser-side check in this suite does.
+ *
+ * What these can say: which address the type-ahead's transport is declared with,
+ * which fields the add-a-movie request is declared to send, and that no literal
+ * anywhere in the project's own scripts names a movie-database host or a key.
+ * What they cannot say is what a browser does with any of it. That half is the
+ * server's: 'add_movie resolves its own metadata over a real database' below
+ * drives real requests and reads the rows they leave behind, so a browser that
+ * disregarded all of this still could not get a title of its own stored.
+ */
+
+t_group('the movie search leaves no credential in the browser', function () {
+	$script = MCM_REPO_ROOT . '/js/mc.js';
+	$source = file_get_contents($script);
+
+	// The greps issue #36 asks for, over every script this project writes -
+	// comments included, because a commented-out key is still a key.
+	$scripts = mcm_browser_sources(MCM_REPO_ROOT);
+	t_ok(count($scripts) > 0, 'there are browser scripts to read');
+	foreach ($scripts as $file) {
+		$name = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		$body = file_get_contents($file);
+
+		t_ok(stripos($body, 'themoviedb') === false, $name . ' names no movie database host');
+		t_ok(stripos($body, 'api_key') === false, $name . ' carries no movie database key');
+		t_ok(stripos($body, 'search_type') === false, $name . ' carries no obsolete search_type parameter');
+		t_same(array(), mcm_js_absolute_urls($file), $name . ' names no host of its own at all');
+	}
+
+	// The type-ahead's transport is the one request on this page that $.ajax()
+	// does not make, so the checks in 'the csrf token reaches the browser'
+	// cannot see it. It is read off the object literal it is declared in, so a
+	// URL somewhere else in the file cannot satisfy this.
+	t_same(1, preg_match_all('/remote\s*:\s*\{/', $source), 'js/mc.js declares exactly one remote type-ahead source');
+	$remote = mcm_js_object_property($source, 'remote');
+	t_ok($remote !== '', 'and that declaration can be read');
+	$url = mcm_js_property($remote, 'url');
+	t_same('tmdb.php?operation=search&query=%QUERY', $url, 'the type-ahead searches this site, by naming an operation rather than a URL');
+	t_same(0, substr_count($url, ':'), 'the address it searches names no scheme, so it resolves to this site');
+	t_lacks('//', $url, 'and no host of its own either');
+	// The proxy accepts "query" and "page" and refuses any other field, so a
+	// credential could not be added to that address even by hand.
+	t_lacks('api_key', $url, 'and carries no key');
+
+	// And the add-a-movie request carries the two identifiers and nothing else.
+	// Every descriptive field it used to send is gone, which is the browser
+	// half of "the server resolves the metadata itself".
+	$add = null;
+	foreach (mcm_js_ajax_calls($script) as $call) {
+		if ($call['url'] === 'add_movie.php') {
+			$add = $call;
+		}
+	}
+	t_ok($add !== null, 'js/mc.js makes a request to add_movie.php');
+	t_same(
+		array('movie_list_id', 'tmdb_movie_id'),
+		($add === null) ? array() : $add['data'],
+		'and it names only the list and the film, never what the film is called'
+	);
 });
 
 /*
@@ -5819,6 +6190,178 @@ t_group('import over a real database and a stubbed TMDb', function () {
 	}
 	mcm_server_stop($app);
 	mcm_server_stop($stub);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * The proxy's policy half and its execution half
+ * ---------------------------------------------------------------------------
+ *
+ * Two pages of this site reach the proxy without HTTP, and they need different
+ * things from it. import_list.php reads a list on a visitor's behalf and wants
+ * the whole policy asked again, refusal included: mcm_tmdb_resolve().
+ * add_movie.php has already asked the method, the session, the token and the
+ * list with its own guards before it needs a film's details, and has a page of
+ * its own to answer, so it wants the execution half alone and a failure handed
+ * back as a value: mcm_tmdb_execute().
+ *
+ * One thing separates them - what a refusal does - and everything below is
+ * about keeping that one thing from becoming two policies. The behavioural half
+ * drives both against the same absent session and the same operation, so the
+ * difference is observed rather than described. The source half fixes which
+ * calls each of them may contain, and which pages may call the execution half
+ * at all, because "this page already has guards" must not be something a page
+ * can assert about itself.
+ *
+ * That the execution half did not weaken add_movie.php is proven where it has
+ * always been proven: 'add_movie resolves its own metadata over a real
+ * database' refuses an anonymous add and a non-owner's add and shows the stub
+ * received nothing.
+ */
+
+t_group('the proxy asks its policy on one half and not the other', function () {
+	$fixture = mcm_fixture('tmdb-execute');
+	$stub    = mcm_server_start($fixture);
+	mcm_tmdb_configure($fixture, array(
+		'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+		'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+	));
+
+	try {
+		/* 1. The execution half, from a page with nobody behind it ---------- */
+
+		$result = mcm_cli($fixture, 'tmdb_execute.php', array('MCM_TMDB_EXECUTE_MODE' => 'execute'));
+		$report = mcm_report($result['stdout']);
+		$at     = function ($key) use ($report) {
+			return isset($report[$key]) ? $report[$key] : '(absent)';
+		};
+
+		t_same('no', $at('signed_in'), 'the page driving the execution half has nobody signed in behind it');
+
+		// search's caller policy is "user". The execution half asks no policy
+		// at all, so it answers anyway - which is the whole contract, and the
+		// reason the written-down caller list below exists.
+		t_same('yes', $at('search_ok'), 'the execution half serves an operation whose caller policy it never asks about');
+		t_same('yes', $at('movie_ok'), 'and serves an ordinary operation');
+		t_same('Fight Club', $at('movie_title'), 'answering the projection, not the upstream body');
+
+		// Every way a plan can be refused comes back as a value.
+		$refusals = array(
+			'no_such_operation' => 'an operation that does not exist',
+			'unknown_field'     => 'a field the operation does not accept',
+			'bad_value'         => 'a value the operation will not take',
+			'missing_value'     => 'a value the operation needs and did not get',
+		);
+		foreach ($refusals as $name => $description) {
+			t_same('no', $at($name . '_ok'), $description . ' is refused');
+			t_same('request', $at($name . '_category'), 'and comes back as the request category rather than ending the request');
+			t_same('400', $at($name . '_status'), 'and carries the status a caller would answer with');
+			t_same('present', $at($name . '_reason'), 'and a reason for the caller to log');
+			t_same('', $at($name . '_title'), 'and no data at all');
+		}
+
+		// An upstream failure was already a value on both halves; it still is.
+		t_same('no', $at('upstream_ok'), 'an upstream failure is refused too');
+		t_same('upstream', $at('upstream_category'), 'and keeps its own category');
+
+		// The assertion the whole mode exists for: nothing above ended the
+		// request. A refusal that exited would take this line with it.
+		t_same('yes', $at('reached_end'), 'not one of those refusals ended the request');
+
+		/* 2. The policy half, from the same page and the same session ------- */
+
+		$result = mcm_cli($fixture, 'tmdb_execute.php', array('MCM_TMDB_EXECUTE_MODE' => 'resolve'));
+		$report = mcm_report($result['stdout']);
+
+		t_same('no', isset($report['signed_in']) ? $report['signed_in'] : '(absent)', 'the page driving the policy half has nobody signed in behind it either');
+		t_ok(!isset($report['reached_end']), 'the policy half ends the request instead of handing a refusal back');
+		t_ok(!isset($report['resolve_search_ok']), 'so the caller never sees a result to report');
+		t_contains(
+			'{"error":"authentication_required","message":"You must be signed in to do that."}',
+			$result['stdout'],
+			'and the caller of the policy half gets the shared fixed body'
+		);
+		t_contains('no signed-in user', $result['log'], 'with the reason in the log');
+	} catch (Throwable $error) {
+		mcm_server_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($stub);
+});
+
+t_group('neither half of the proxy can become the other', function () {
+	$proxy = MCM_REPO_ROOT . '/inc/tmdb_proxy.php';
+
+	// The policy half asks the policy. This restates what 'tmdb proxy caller
+	// policy' proves about the order, for the one reason that matters here: if
+	// these ever moved into the execution half, the two would stop being
+	// different and the caller list below would stop meaning anything.
+	$resolve = mcm_method_tokens($proxy, 'mcm_tmdb_resolve');
+	t_ok(count($resolve) > 0, 'mcm_tmdb_resolve() is declared');
+	t_same(1, mcm_count_calls_in($resolve, 'mcm_tmdb_require_session'), 'the policy half asks who is calling');
+	t_same(1, mcm_count_calls_in($resolve, 'mcm_tmdb_require_owner'), 'and whose list it is');
+	t_ok(mcm_count_calls_in($resolve, 'mcm_json_error') > 0, 'and refuses a request itself');
+
+	// The execution half asks none of it. Read off its own tokens, so a call
+	// elsewhere in the file cannot satisfy this.
+	$execute = mcm_method_tokens($proxy, 'mcm_tmdb_execute');
+	t_ok(count($execute) > 0, 'mcm_tmdb_execute() is declared');
+	foreach (array('mcm_tmdb_require_session', 'mcm_tmdb_require_owner', 'mcm_require_login', 'mcm_require_list_owner') as $guard) {
+		t_same(0, mcm_count_calls_in($execute, $guard), 'the execution half does not ask ' . $guard . '()');
+	}
+	// Nor does it end a request. This is the difference, stated as the absence
+	// of the one call that would remove it.
+	t_same(0, mcm_count_calls_in($execute, 'mcm_json_error'), 'the execution half refuses nothing itself');
+	t_same(0, mcm_count_calls_in($execute, 'mcm_tmdb_respond'), 'and answers nothing itself');
+	t_same(0, mcm_count_calls_in($execute, 'exit'), 'and ends nothing');
+
+	// Both end at the same place, so there is still one path to TMDb.
+	t_same(1, mcm_count_calls_in($execute, 'mcm_tmdb_run'), 'the execution half runs the operation through mcm_tmdb_run()');
+	t_same(1, mcm_count_calls_in($resolve, 'mcm_tmdb_run'), 'and so does the policy half');
+	t_same(0, mcm_count_calls_in($execute, 'mcm_tmdb_get'), 'neither reaches inc/tmdb.php on its own');
+	t_same(0, mcm_count_calls_in($resolve, 'mcm_tmdb_get'), 'and neither does the other');
+
+	// And who may call the execution half is a written-down list rather than
+	// whatever the source happens to do, exactly as the guard adoption list is.
+	$callers = array();
+	foreach (mcm_php_sources(MCM_REPO_ROOT) as $file) {
+		if ($file === $proxy) {
+			continue;
+		}
+		if (mcm_count_calls($file, 'mcm_tmdb_execute') > 0) {
+			$callers[] = substr($file, strlen(MCM_REPO_ROOT) + 1);
+		}
+	}
+	sort($callers);
+	t_same(mcm_tmdb_execute_callers(), $callers, 'the execution half is called by exactly the pages that have answered for it');
+
+	// Each of those pages asks all four guards before it, and asks the policy
+	// half nowhere - one page asking both would be asking the same questions
+	// twice and answering them two different ways.
+	foreach (mcm_tmdb_execute_callers() as $page) {
+		$path   = MCM_REPO_ROOT . '/' . $page;
+		$source = mcm_flat_source($path);
+
+		t_ok(in_array($page, mcm_guarded_entry_points(), true), $page . ' is one of the endpoints that adopted the guards');
+		t_same(0, mcm_count_calls($path, 'mcm_tmdb_resolve'), $page . ' does not also ask the policy half');
+		foreach (mcm_guard_functions() as $guard) {
+			t_ok(mcm_count_calls($path, $guard) > 0, $page . ' asks ' . $guard . '() before it may use the execution half');
+			t_ok(
+				strpos($source, $guard) < strpos($source, 'mcm_tmdb_execute'),
+				$page . ' asks ' . $guard . '() before it calls the execution half'
+			);
+		}
+	}
+
+	// The page that has not answered for it still uses the policy half, and the
+	// entry point still holds no policy of its own. Both are issue #38's, and
+	// both have to survive this.
+	$import = MCM_REPO_ROOT . '/import_list.php';
+	t_same(1, mcm_count_calls($import, 'mcm_tmdb_resolve'), 'import_list.php still reads its list through the policy half');
+	t_same(0, mcm_count_calls($import, 'mcm_tmdb_execute'), 'and does not reach past it');
+	$serve = mcm_method_tokens($proxy, 'mcm_tmdb_serve');
+	t_same(1, mcm_count_calls_in($serve, 'mcm_tmdb_resolve'), 'the entry point still settles a request through the policy half');
+	t_same(0, mcm_count_calls_in($serve, 'mcm_tmdb_execute'), 'and never reaches past it either');
 });
 
 t_group('tmdb proxy source checks of last resort', function () {

@@ -38,11 +38,14 @@ require_once(__DIR__ . '/inc/tmdb_proxy.php');
  * and no reason to turn away a page that has none.
  *
  * This file is one of two ways into the proxy, and the only one a browser has.
- * The other is a page of this site calling mcm_tmdb_resolve() directly:
- * import_list.php reads a TMDb list that way rather than making an HTTP request
- * to its own server. Both go through the same policy, in the same order, and
- * neither can skip a question. Movie search and the trailer modal are moved onto
- * the proxy by issues #36 and #37.
+ * The add-a-movie type-ahead and the trailer modal both come through it, which
+ * is what took the TMDb credential out of the browser. The other way is a page
+ * of this site calling in directly rather than making an HTTP request to its own
+ * server: import_list.php reads a TMDb list through mcm_tmdb_resolve(), which
+ * asks the same policy in the same order and lets no question be skipped, and
+ * add_movie.php - which has already settled every one of those questions with
+ * its own guards before it needs a film's details - calls mcm_tmdb_execute() for
+ * the execution half alone, so a failure comes back to it as a value.
  */
 
 // The request's own fields, from the body of a POST or the query string of a

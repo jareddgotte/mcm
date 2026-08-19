@@ -7,25 +7,11 @@
 // 9/24/2013 proj begin date
 // 10/19/2013 this version release date
 
-// http://docs.themoviedb.apiary.io/
-// https://www.themoviedb.org/documentation/api/wrappers-libraries
-
-/* When considering adding a search/add function, use this code
-var api_key = 'YOUR_API_KEY';
-$(document).ready(function(){
-	$.ajax({
-		url: 'http://api.themoviedb.org/3/search/movie?api_key=' + api_key + '&query=fight+club',
-		dataType: 'jsonp',
-		jsonpCallback: 'testing'
-	}).error(function() {
-		console.log('error')
-	}).done(function(response) {
-		for (var i = 0; i < response.results.length; i++) {
-			$('#search_results').append('<li>' + response.results[i].title + '</li>');
-		}
-	});
-});
-*/
+// This file used to carry a worked example of the search it wanted: a browser
+// calling the movie database directly, with this site's credential written into
+// the script. That is the thing issue #36 removed, so the example is gone with
+// it. Searching goes through tmdb.php, which reaches the credential only via
+// inc/tmdb.php; see the TMDb access section of AGENTS.md.
 
 /* 
 	****  Purpose

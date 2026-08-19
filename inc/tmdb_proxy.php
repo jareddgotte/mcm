@@ -50,11 +50,15 @@
  * about never. The cache holds the projection, not the upstream body, so even
  * the file on disk carries nothing that could not be served.
  *
- * List import is the first thing in this site to use it, and it uses it without
- * an HTTP request: import_list.php calls mcm_tmdb_resolve() in its own process,
- * so the operation's questions - who is asking, what they asked for, whose list
- * it is - are asked of it exactly as they are asked of a browser at tmdb.php.
- * Search and the trailer modal are repointed at it by later issues.
+ * Three things use it, by two doors. The add-a-movie type-ahead in js/mc.js asks
+ * tmdb.php for the search operation over HTTP, which is what took the credential
+ * out of the browser. import_list.php calls mcm_tmdb_resolve() in its own
+ * process instead of making an HTTP request to this site's own server, so the
+ * operation's questions - who is asking, what they asked for, whose list it is -
+ * are asked of it exactly as they are asked of a browser. add_movie.php has
+ * already asked all of those with the guards by the time it needs a film's
+ * details, and calls mcm_tmdb_execute() for the execution half alone. The
+ * trailer modal reads its videos through tmdb.php.
  */
 
 // The client, the configuration and mcm_log() come from inc/tmdb.php and the
@@ -1018,6 +1022,54 @@ function mcm_tmdb_resolve($operation, $request, $db_connection = null)
 	}
 
 	mcm_tmdb_require_owner($plan, $db_connection);
+
+	return mcm_tmdb_run($plan);
+}
+
+/**
+ * Plan and run one operation, answering every failure as a value.
+ *
+ * The execution half of mcm_tmdb_resolve() above, and deliberately nothing
+ * else: it names no policy, asks no session and asks no owner. Both end at
+ * mcm_tmdb_run(), which stays the one place an operation is executed and the
+ * only path to inc/tmdb.php.
+ *
+ * It exists because a refusal has two right answers, and which one is right
+ * depends on who is asking. A request off the wire, and a page reading a list
+ * on a visitor's behalf, both want mcm_tmdb_resolve(): a bad operation or a
+ * value the operation will not accept ends the request there, with the bounded
+ * body from inc/guards.php. add_movie.php wants the other answer. By the time
+ * it needs a film's details it has already settled the method, the session, the
+ * token and the list with its own guards, and it has a page of its own to
+ * answer - so a failure has to come back as a value it can turn into that
+ * page's response, not end the request from inside a helper.
+ *
+ * That is the whole of the difference, and it is why this asks no policy
+ * question rather than asking a weaker version of one: a caller that has not
+ * already settled who is asking must use mcm_tmdb_resolve(), which will.
+ * Who may call this is written down in mcm_tmdb_execute_callers() in
+ * tests/entrypoints.php, and the suite fails a page that starts calling it
+ * without being named there.
+ *
+ * @param mixed $operation the requested operation name
+ * @param mixed $request   the request's own fields
+ * @return array as mcm_tmdb_run() returns; a refused plan comes back as the
+ *               "request" category rather than ending the request
+ */
+function mcm_tmdb_execute($operation, $request)
+{
+	$plan = mcm_tmdb_plan($operation, $request);
+	if (empty($plan['ok'])) {
+		return array(
+			'ok'       => false,
+			'category' => 'request',
+			'status'   => 400,
+			'message'  => 'That request could not be made.',
+			// Bounded by mcm_tmdb_plan() through mcm_log_detail() where a value
+			// was involved. For the caller's log, never for its response.
+			'reason'   => isset($plan['reason']) ? $plan['reason'] : '',
+		);
+	}
 
 	return mcm_tmdb_run($plan);
 }
