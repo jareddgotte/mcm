@@ -4,6 +4,8 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/tmdb_proxy.php');
+require_once(__DIR__ . '/inc/dialog_trailers.php');
 
 
 // The wrapper carries the TMDb credential, so it is built for this request and
@@ -30,46 +32,17 @@ $overview = $movie['overview'];
 $release_date = $movie['release_date'];
 $runtime = $movie['runtime'];
 
-function cmp ($a, $b) {
-	$ranks = array("Standard", "HQ", "HD"); // HD > HQ > Standard
-	$al = array_search($a['size'], $ranks);
-	$bl = array_search($b['size'], $ranks);
-	if ($al == $bl) {
-		return 0;
-	}
-	return ($al < $bl) ? -1 : 1;
-}
+// 'videos' is open to any session, so no login/ownership guard applies here -
+// mcm_tmdb_plan()/mcm_tmdb_run() are the same seam mcm_tmdb_serve() uses, just
+// called directly instead of over HTTP.
+$videos_plan = mcm_tmdb_plan('videos', array('movie_id' => $movie_id));
+$videos_result = (!empty($videos_plan['ok'])) ? mcm_tmdb_run($videos_plan) : array('ok' => false);
+$video_rows = (!empty($videos_result['ok']) && isset($videos_result['data']['results']))
+	? $videos_result['data']['results']
+	: array();
 
-$trailers = $tmdb->getMovieTrailers($movie_id);
-$yt_trailers = $trailers['youtube'];
-usort($yt_trailers, "cmp");
-$yt_trailers = array_reverse($yt_trailers);
-
-if (count($yt_trailers) > 0) {
-	$trailer_html = '<div class="panel-group" id="accordion">';
-	foreach ($yt_trailers as $k => $v) {
-		$tmp = '
-			<div class="panel panel-default">
-				<div class="panel-heading">
-					<h3 class="panel-title">
-						<a data-toggle="collapse" data-parent="#accordion" href="#collapse%s"><strong>%s</strong>, %s</a>
-					</h3>
-				</div>
-				<div id="collapse%s" class="panel-collapse collapse%s">
-					<div class="panel-body">
-						<img class="trailer-scale" src="img/trailer-scale.png" alt="">
-						<iframe width="100%%" height="100%%" src="//www.youtube.com/embed/%s?autoplay=0&rel=0" frameborder="0" allowfullscreen></iframe>
-					</div>
-				</div>
-			</div>
-		';
-		// Everything below the format string comes from TMDb: the labels are text,
-		// and the video id is a single path segment of the embed URL.
-		$trailer_html .= sprintf($tmp, (int) $k, mcm_html($v['size']), mcm_html($v['name']), (int) $k, ($k == 0) ? ' in' : '', mcm_url(substr($v['source'], 0, (strpos($v['source'], '&') != FALSE) ? strpos($v['source'], '&') : strlen($v['source']))));
-	}
-	$trailer_html .= '</div>';
-}
-else $trailer_html = '<div class="alert alert-warning"><strong>No trailer available.</strong></div>';
+$yt_trailers = mcm_dialog_usable_trailers($video_rows);
+$trailer_html = mcm_dialog_trailer_html($yt_trailers);
 
 // $genress is markup once it leaves this loop, so each name is escaped as it
 // goes in and the separator stays a literal separator.

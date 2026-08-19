@@ -279,10 +279,16 @@ the application. Setup is documented in `README.md`.
   it. `configuration`, `movie` and `videos` take any session, because the public
   sharing page and the movie dialog need them without an account; `search` needs
   a signed-in caller; `list` needs one who owns the local `movie_list_id` the
-  request names. The order inside `mcm_tmdb_serve()` is the endpoints' own -
+  request names. The order inside `mcm_tmdb_resolve()` is the endpoints' own -
   operation, then the session, then the request's values, then the connection
   and ownership, then TMDb - so a refusal costs no outbound request, and the
-  suite reads that order off that one function's tokens.
+  suite reads that order off that one function's tokens. `mcm_tmdb_serve()` is
+  only the door: it settles the method, calls `mcm_tmdb_resolve()` and turns
+  what comes back into a body. A page of this site that needs the same answer
+  calls `mcm_tmdb_resolve()` directly rather than making an HTTP request to its
+  own server, and passes the connection it already holds so ownership is
+  settled over that one; the question is still asked, because the caller policy
+  is the operation's and not something a caller may assert for it.
 - Neither the POST guard nor the token guard applies, because nothing here
   writes. `mcm_read_guarded_guard_users()` in `tests/entrypoints.php` is where
   that is written down, separately from `mcm_unguarded_guard_users()`, so
@@ -290,7 +296,12 @@ the application. Setup is documented in `README.md`.
 - The `list` operation cannot be driven end to end without a database, so its
   behaviour lives in `tmdb proxy list ownership over a real database` and its
   projection is covered without one by `tests/pages/tmdb_projection.php`, which
-  hands every projector a payload TMDb would never send.
+  hands every projector a payload TMDb would never send. What an import writes
+  from that answer is `import over a real database and a stubbed TMDb`, which
+  needs the database server and both built-in servers; the refusals settled
+  before a connection is opened are driven without a database by `import
+  refusals cost no outbound request`. Both count outbound requests the same
+  way, off the stub's own log.
 - Only the configuration answer is cached, for a day, in a directory the
   application creates 0700 and writes through a temporary file and a rename, so
   a reader never sees half an answer and two writers cannot corrupt one. It
@@ -311,29 +322,61 @@ the application. Setup is documented in `README.md`.
   a refusal where an answer was expected is a failing assertion instead of a
   TypeError; and catch `Throwable`, not `Exception`, in a group that has to stop
   a server on the way out.
-- Two things call the proxy. `js/mc.js` searches it, same-origin and with the
-  operation named in the URL, so no browser-served script names a TMDb host or
+- Everything in this site that reaches TMDb now goes through the proxy, by two
+  doors, and which door a caller uses is decided by who has already asked the
+  policy questions. `js/mc.js` searches over HTTP - same-origin, with the
+  operation named in the URL - so no browser-served script names a TMDb host or
   a key and `git grep -nE "api_key|themoviedb" -- js/` is empty.
-  `add_movie.php` calls `mcm_tmdb_resolve()`, which is `mcm_tmdb_plan()` plus
-  `mcm_tmdb_run()` in this process: the same operation, validation and
-  projection the entry point serves, without a request to itself. Add a caller
-  that way rather than by building a second path to `mcm_tmdb_get()`.
-  `mcm_tmdb_resolve()` asks nobody who is calling; the guards have already
-  settled that, which is the only reason a page may reach it.
+  `import_list.php` and `add_movie.php` call in from this process rather than
+  making an HTTP request to this site's own server.
+- The two in-process entry points are not the same call, and the difference is
+  what a refusal does. `mcm_tmdb_resolve()` is the whole policy in order -
+  operation, session, values, ownership, then TMDb - and a refusal ends the
+  request there with the bounded body from `inc/guards.php`.
+  `mcm_tmdb_execute()` is the execution half alone: it plans and runs, names no
+  policy, and hands every failure back as a value. A caller that has not already
+  settled who is asking must use `mcm_tmdb_resolve()`, which will settle it.
+  Both end at `mcm_tmdb_run()`, which stays the one place an operation is
+  executed and the only path to `inc/tmdb.php`.
+  `mcm_tmdb_execute_callers()` in `tests/entrypoints.php` is the written-down
+  list of who may call the execution half, and a page that starts calling it
+  without being added there fails the suite - which is what keeps "I already
+  have guards" from becoming something a page may simply assert.
+- `import_list.php` is the first page on the proxy and reaches it without HTTP.
+  It settles the method, the session, the token, the shape of the TMDb list
+  identifier and the local list's ownership itself, and only then calls
+  `mcm_tmdb_resolve('list', ...)` with the connection it opened for its own
+  writes - the policy is asked again there, because the caller policy belongs to
+  the operation and is not something a page may assert on its behalf. The TMDb
+  list identifier is the one value a person typed, so a bad one gets its own
+  bounded sentence the way a bad list name does, rather than a catalogue
+  refusal; an upstream failure is `mcm_fail()`, with the category in the log and
+  the generic message to the visitor.
 - `add_movie.php` takes a list identifier and a film identifier and nothing
   else. The four descriptive fields a request used to carry are read nowhere,
   so they are ignored rather than refused - a browser holding a cached copy of
   the old script keeps working and still cannot describe a film - and what is
   stored is the movie projection, each value through `mcm_column_text()` to the
-  width of the column that holds it. The lookup happens after
-  `mcm_require_list_owner()`, so a refusal costs no outbound request, and a film
-  the endpoint cannot resolve is answered `3` and stores nothing; `1` and `2`
-  still mean inserted and duplicate.
-- The old vendored wrapper in `inc/classes/TMDb.inc` is still what
-  `dialog.php`, `import_list.php` and the two views call, and it still holds
-  `TMDB_API_KEY`; it is built per request now rather than kept in `$_SESSION`.
-  The trailer modal and list import move onto the proxy by later issues, and the
-  wrapper and the dead auth-session path are removed after that.
+  width of the column that holds it. The lookup is `mcm_tmdb_execute()` and it
+  happens after `mcm_require_list_owner()`, so a refusal costs no outbound
+  request; it wants the returned-failure contract because it has a page of its
+  own to answer, and a film it cannot resolve is answered `3` and stores
+  nothing. `1` and `2` still mean inserted and duplicate.
+- The old vendored wrapper in `inc/classes/TMDb.inc` is still what `dialog.php`
+  and the two views call, and it still holds `TMDB_API_KEY`; it is built per
+  request now rather than kept in `$_SESSION`. `dialog.php` is a partial
+  exception: its trailer accordion moved onto the proxy's `videos` operation,
+  calling `mcm_tmdb_plan()` / `mcm_tmdb_run()` directly - the same seam
+  `mcm_tmdb_execute()` now wraps, safe there only because `videos`' caller
+  policy is `any`. `getConfiguration()` and `getMovie()` in that file are still
+  the old wrapper. Which of a movie's proxied videos are a usable YouTube
+  trailer or teaser, and their order, is `mcm_dialog_usable_trailers()` in
+  `inc/dialog_trailers.php`; the accordion and empty-state markup for that
+  selection is a second pure function beside it, `mcm_dialog_trailer_html()`, so
+  `dialog.php` only calls the two in sequence. Both are pure functions on the
+  same pattern as the projectors, so the suite drives them with hand-built rows
+  in `tests/pages/tmdb_projection.php` rather than a live page. The wrapper and
+  the dead auth-session path are removed after that.
 
 ## Database access
 

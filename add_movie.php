@@ -7,10 +7,13 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // shared guards, so a refusal here is the same refusal every other endpoint
 // gives, and every one of them is given before any query runs.
 require_once(__DIR__ . '/inc/guards.php');
-// The proxy's policy, used from inside this process rather than over the wire:
-// the operation is named, its values are validated, the request is made by the
-// one client that holds the credential, and the answer is projected before this
-// page sees it. mcm_tmdb_resolve() is that whole path in one call.
+// The proxy's own machinery, used from inside this process rather than over the
+// wire: the operation is named, its values are validated, the request is made by
+// the one client that holds the credential, and the answer is projected before
+// this page sees it. mcm_tmdb_execute() is that path without the policy
+// questions in front of it - this page has already asked all of them below, and
+// needs a failure back as a value rather than as a refusal sent from inside a
+// helper. A page that has not asked them calls mcm_tmdb_resolve() instead.
 require_once(__DIR__ . '/inc/tmdb_proxy.php');
 require_once('inc/php-login.php');
 
@@ -55,10 +58,14 @@ if ($tmdb_movie_id === null) {
 	mcm_json_error(400, 'add_movie: refused a movie id that is not a positive integer: ' . mcm_log_detail($tmdb_movie_id_submitted));
 }
 
-// Now, and only now, ask what this film is. The four fields below are the movie
-// operation's own projection - the same four tmdb.php would answer a browser
-// with - and they are the only description of this film that is ever stored.
-$resolved = mcm_tmdb_resolve('movie', array('movie_id' => $tmdb_movie_id));
+// Now, and only now, ask what this film is. Every question mcm_tmdb_resolve()
+// would ask has been answered above - the method, the session, the token and
+// the list - so what is left is the execution half, which hands a failure back
+// here instead of ending the request with it. The four fields below are the
+// movie operation's own projection, the same four tmdb.php would answer a
+// browser with, and they are the only description of this film that is ever
+// stored.
+$resolved = mcm_tmdb_execute('movie', array('movie_id' => $tmdb_movie_id));
 if (empty($resolved['ok'])) {
 	// The category, and the proxy's own bounded reason where there is one. An
 	// upstream body, a URL or a credential has no business in this site's log

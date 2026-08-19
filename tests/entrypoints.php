@@ -721,6 +721,29 @@ function mcm_read_guarded_guard_users()
 }
 
 /**
+ * The files that may call mcm_tmdb_execute(), the proxy's execution half.
+ *
+ * mcm_tmdb_resolve() asks the whole policy and refuses a request itself;
+ * mcm_tmdb_execute() asks none of it and hands every failure back as a value.
+ * The second is correct only for a page that has already settled who is asking
+ * with the guards, and "I already have guards" is exactly the kind of thing a
+ * page must not be able to simply assert about itself. So this is a
+ * written-down list, on the same footing as mcm_guarded_entry_points(): a page
+ * that starts calling the execution half without being added here fails the
+ * suite, and adding it here is where somebody has to answer for it.
+ *
+ * One file is on it. add_movie.php asks all four guards before it needs a
+ * film's details, and has a page of its own to answer, so a refusal has to come
+ * back to it rather than end the request from inside a helper.
+ *
+ * @return array
+ */
+function mcm_tmdb_execute_callers()
+{
+	return array('add_movie.php');
+}
+
+/**
  * The four guards, by name, so a case can say which of them a file calls.
  *
  * @return array
