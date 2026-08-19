@@ -60,9 +60,12 @@ if ($tmdb_movie_id === null) {
 // with - and they are the only description of this film that is ever stored.
 $resolved = mcm_tmdb_resolve('movie', array('movie_id' => $tmdb_movie_id));
 if (empty($resolved['ok'])) {
-	// The category and nothing else: an upstream body, a URL or a credential
-	// has no business in this site's log either.
-	mcm_log('add_movie', 'the movie database could not describe movie ' . $tmdb_movie_id . ': ' . (isset($resolved['category']) ? $resolved['category'] : 'unavailable'));
+	// The category, and the proxy's own bounded reason where there is one. An
+	// upstream body, a URL or a credential has no business in this site's log
+	// either, and none of them is ever in a category or a reason.
+	mcm_log('add_movie', 'the movie database could not describe movie ' . $tmdb_movie_id . ': '
+		. (isset($resolved['category']) ? $resolved['category'] : 'unavailable')
+		. (isset($resolved['reason']) ? ' (' . $resolved['reason'] . ')' : ''));
 	echo '3'; // could not be looked up
 	exit();
 }
