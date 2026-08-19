@@ -16,6 +16,7 @@
  */
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/tmdb_proxy.php');
+require_once(__DIR__ . '/inc/dialog_trailers.php');
 
 header('Content-Type: text/plain; charset=utf-8');
 
@@ -174,3 +175,48 @@ mcm_projection('list_markup_name', mcm_tmdb_project_list(array(
 	'name'  => '<script>alert(1)</script>',
 	'items' => array(),
 )));
+
+/*
+ * The movie dialog's own selection over an already-projected videos answer
+ * (issue #37): dialog.php never sees a row TMDb sent, only what
+ * mcm_tmdb_project_videos() built, so these fixtures go through that
+ * projector first, exactly as dialog.php does.
+ */
+
+mcm_projection('dialog_trailers', mcm_dialog_usable_trailers(mcm_tmdb_project_videos(array(
+	'id'      => 550,
+	'results' => array(
+		// A YouTube teaser: usable, but ranked below any trailer.
+		array('id' => '1', 'key' => 'teaser1', 'name' => 'Teaser', 'site' => 'YouTube', 'type' => 'Teaser', 'size' => 1080, 'official' => true),
+		// The lower-resolution of two usable trailers.
+		array('id' => '2', 'key' => 'trailer720', 'name' => 'Trailer 720p', 'site' => 'YouTube', 'type' => 'Trailer', 'size' => 720, 'official' => true),
+		// The higher-resolution trailer: should sort ahead of both of the above.
+		array('id' => '3', 'key' => 'trailer1080', 'name' => 'Trailer 1080p', 'site' => 'YouTube', 'type' => 'Trailer', 'size' => 1080, 'official' => true),
+		// Not YouTube: dropped regardless of type.
+		array('id' => '4', 'key' => 'vimeoclip', 'name' => 'Vimeo Clip', 'site' => 'Vimeo', 'type' => 'Trailer', 'size' => 1080, 'official' => true),
+		// YouTube, but neither a trailer nor a teaser: dropped.
+		array('id' => '5', 'key' => 'behind1', 'name' => 'Behind the Scenes', 'site' => 'YouTube', 'type' => 'Featurette', 'size' => 1080, 'official' => false),
+		// The old response's shape: no key survives mcm_tmdb_project_videos(),
+		// so this row is unusable no matter what mcm_dialog_usable_trailers()
+		// does with it - the same row the projection fixture above proves
+		// yields no key and no numeric size.
+		array('name' => 'Old Trailer', 'source' => 'abc123', 'size' => 'HD', 'official' => 'no'),
+	),
+))['results']));
+
+// No videos at all - what an unexpected or empty upstream answer projects to.
+// The old code read $trailers['youtube'] straight off this shape and would
+// have fataled on the missing key; this is the friendly empty state instead.
+mcm_projection('dialog_trailers_empty', mcm_dialog_usable_trailers(mcm_tmdb_project_videos(array(
+	'id'      => 550,
+	'results' => array(),
+))['results']));
+
+// Videos exist, but none of them are a usable YouTube trailer or teaser.
+mcm_projection('dialog_trailers_none_usable', mcm_dialog_usable_trailers(mcm_tmdb_project_videos(array(
+	'id'      => 550,
+	'results' => array(
+		array('id' => '4', 'key' => 'vimeoclip', 'name' => 'Vimeo Clip', 'site' => 'Vimeo', 'type' => 'Trailer', 'size' => 1080, 'official' => true),
+		array('id' => '5', 'key' => 'behind1', 'name' => 'Behind the Scenes', 'site' => 'YouTube', 'type' => 'Featurette', 'size' => 1080, 'official' => false),
+	),
+))['results']));

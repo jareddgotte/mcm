@@ -5000,6 +5000,22 @@ t_group('tmdb proxy projections', function () {
 	// And escaping is not this file's job: a stored value keeps the bytes that
 	// were sent, and is escaped where it lands.
 	t_same('<script>alert(1)</script>', mcm_at($of('list_markup_name'), 'name'), 'a list name that is markup keeps its bytes');
+
+	// The movie dialog's own selection (issue #37): a projected videos answer
+	// goes in, and only usable YouTube trailers and teasers, ranked, come out.
+	$dialog_trailers = $of('dialog_trailers');
+	t_same(3, count($dialog_trailers), 'a vimeo row, a non-trailer row and the old response shape are all dropped');
+	t_same('trailer1080', mcm_at($dialog_trailers, '0.key'), 'the higher-resolution trailer sorts first');
+	t_same('trailer720', mcm_at($dialog_trailers, '1.key'), 'the lower-resolution trailer sorts second');
+	t_same('teaser1', mcm_at($dialog_trailers, '2.key'), 'a teaser sorts behind every trailer regardless of size');
+
+	// The friendly empty state this fix exists for: the old code read
+	// $trailers['youtube'] straight off an upstream answer and fataled the
+	// moment that key was not there. A movie with no videos, or none of them
+	// usable, now yields an empty list instead - what dialog.php's "No trailer
+	// available" branch is keyed on - never a warning or a fatal error.
+	t_same(array(), $of('dialog_trailers_empty'), 'a movie with no videos selects no trailers');
+	t_same(array(), $of('dialog_trailers_none_usable'), 'videos that are not a usable YouTube trailer or teaser select none');
 });
 
 t_group('tmdb proxy configuration cache', function () {

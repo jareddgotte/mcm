@@ -300,9 +300,17 @@ the application. Setup is documented in `README.md`.
 - The old vendored wrapper in `inc/classes/TMDb.inc` is still what
   `dialog.php`, `import_list.php` and the two views call, and it still holds
   `TMDB_API_KEY`; it is built per request now rather than kept in `$_SESSION`.
-  Nothing in the site calls the proxy yet: search, the trailer modal and list
-  import are moved onto it by later issues, and the wrapper and the dead
-  auth-session path are removed after that.
+  `dialog.php` is the one exception: its trailer accordion moved onto the
+  proxy's `videos` operation, calling `mcm_tmdb_plan()` / `mcm_tmdb_run()`
+  directly - the same seam `mcm_tmdb_serve()` uses, minus the HTTP hop, safe
+  here only because `videos`' caller policy is `any`. `getConfiguration()` and
+  `getMovie()` in that file are still the old wrapper. Which of a movie's
+  proxied videos are a usable YouTube trailer or teaser, and their order, is
+  `mcm_dialog_usable_trailers()` in `inc/dialog_trailers.php` - a pure
+  function on the same pattern as the projectors, so the suite drives it with
+  hand-built rows in `tests/pages/tmdb_projection.php` rather than a live
+  page. Search and list import are moved onto the proxy by later issues, and
+  the wrapper and the dead auth-session path are removed after that.
 
 ## Database access
 
