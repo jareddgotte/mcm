@@ -37,8 +37,12 @@ require_once(__DIR__ . '/inc/tmdb_proxy.php');
  * nothing here changes a row, so there is nothing for a CSRF token to protect
  * and no reason to turn away a page that has none.
  *
- * Nothing in this site calls it yet. Movie search, the trailer modal and list
- * import are moved onto it by issues #36, #37 and #38.
+ * This file is one of two ways into the proxy, and the only one a browser has.
+ * The other is a page of this site calling mcm_tmdb_resolve() directly:
+ * import_list.php reads a TMDb list that way rather than making an HTTP request
+ * to its own server. Both go through the same policy, in the same order, and
+ * neither can skip a question. Movie search and the trailer modal are moved onto
+ * the proxy by issues #36 and #37.
  */
 
 // The request's own fields, from the body of a POST or the query string of a
