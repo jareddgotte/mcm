@@ -37,6 +37,9 @@ function mcm_db_uncovered()
 		'an endpoint that reads a row to decide whether to answer at all - the'
 			. ' TMDb proxy asks whose list a request names, and there is no list'
 			. ' to own without a database',
+		'what an authorized list import actually writes - the rows it adds, the'
+			. ' stale ones it updates and the duplicates it skips are rows, so only'
+			. ' a server can hold them',
 	);
 }
 
