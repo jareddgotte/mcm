@@ -1,0 +1,11 @@
+{
+  "name": "mcm-browser-tests",
+  "private": true,
+  "description": "Automated runner for tests/browser/xss.html, the hostile-value browser page.",
+  "scripts": {
+    "test": "node run.js"
+  },
+  "devDependencies": {
+    "playwright": "1.55.1"
+  }
+}

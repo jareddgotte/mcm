@@ -9,10 +9,12 @@ inc/config/config.php
 
 # Generated / third-party artifacts. /vendor is what Composer installs for the
 # development tooling and is never served; /build is where PHPUnit writes its
-# cache and its machine-readable report.
+# cache and its machine-readable report; tests/browser/node_modules is what npm
+# installs for the browser runner. All three are disposable.
 /vendor/
 /var/
 /build/
+/tests/browser/node_modules/
 
 # Logs
 *.log

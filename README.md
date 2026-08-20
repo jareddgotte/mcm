@@ -78,7 +78,17 @@ Interrupting either runner leaves nothing behind: every built-in server and the 
 `composer.json` and `composer.lock` exist for development tooling only — nothing the site loads is a Composer package, `require` stays empty, and `php tests/run.php` needs nothing installed to run and gives the same result whether or not you've ever run Composer.  Run `composer install` from the committed `composer.lock` if you want the pinned tool tree — PHPUnit, at one exact version — and it lands in `/vendor`, which is git-ignored and safe to delete at any time.  `/build` is generated the same way, by PHPUnit, and is equally disposable.
 
 #### The browser page
-The suite is a PHP one and drives no browser.  What a browser builds out of a hostile list name or movie title is answered by `/tests/browser/xss.html`, which you open by hand — in a browser directly, or over any local web server.  It renders a hostile list name, movie title, poster path and movie identifier through the real `/js/dom.js` and `/js/mc.js`, then reports what the document ended up holding; the summary at the top is green when every check passed.  Nothing is installed and no server is needed.
+The suite is a PHP one and drives no browser.  What a browser builds out of a hostile list name or movie title is answered by `/tests/browser/xss.html`, which renders a hostile list name, movie title, poster path and movie identifier through the real `/js/dom.js` and `/js/mc.js`, then reports what the document ended up holding; the summary at the top is green when every check passed.  It still opens by hand — in a browser directly, or over any local web server — with nothing installed and no server needed.
+
+It can also be driven automatically, in a real browser rather than a DOM emulation, because two of the checks depend on layout: the tab strip is only correctly addressed by position once the browser has actually laid it out.  From `tests/browser`, run:
+
+```
+npm install
+npx playwright install chromium
+node run.js
+```
+
+`npm install` and `npx playwright install chromium` are one-time setup: they fetch a pinned version of Playwright and a matching, pinned Chromium build, reproducibly from the committed `package-lock.json`.  `node run.js` then opens the page, reads its own results table, prints every failing check and why, and exits non-zero if any check failed.  On a machine with no Chromium available, it prints a loud `SKIP:` line naming the coverage that was missed and exits zero, the same contract the optional database group below keeps for a missing database server.  This automates only the checks the page already makes; it covers no more of the site than opening the page by hand always did.
 
 #### The optional database group
 Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so the suite runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run, and both runners behave the same way - under PHPUnit those groups are reported as skipped, with the same notice.
