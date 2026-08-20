@@ -42,7 +42,7 @@ and the site itself pulls in no Composer package.
   `mcm_group_tags()` derives the tier from that:
   `quick` for a group that listens on no socket, `integration` for the rest.
   The tier is derived in one place on purpose, so the line between the fast
-  tier and the longer one can move without touching 52 registrations.
+  tier and the longer one can move without touching 54 registrations.
 - Each case builds a throw-away copy of the site under the system temp
   directory and drives it as a child process or through PHP's built-in server,
   so runs never touch the checkout or a real configuration.
