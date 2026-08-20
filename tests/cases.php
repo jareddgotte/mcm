@@ -6552,3 +6552,456 @@ t_group('the signed-in view renders through a TMDb fixture stub with the wrapper
 	mcm_server_stop($app);
 	mcm_server_stop($stub);
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * Mail sending
+ * ---------------------------------------------------------------------------
+ *
+ * Registration and password reset both end in a send, and whether a send works
+ * is a question about the runtime rather than about this site: the vendored
+ * SMTP library calls each(), which PHP 8.0 removed. So the cases below drive
+ * the real send path - the same classes the two pages call, the same PHPMailer,
+ * the same commands - against a stand-in on the loopback interface, once per
+ * runtime the developer has, and read what happened off the stand-in's own
+ * transcript rather than off a return value.
+ *
+ * Four sends are driven on each runtime, and the differences between them are
+ * the evidence:
+ *
+ *   SMTP, everything accepted   what a deployment following the tracked example
+ *                               configuration actually does
+ *   SMTP, DATA refused          the same path, refused politely at the same step
+ *   mail(), a local mailbox     the same PHPMailer and the same message, over
+ *                               the other transport the site can be set to
+ *   SMTP, each() rewritten      the same everything, with the two loops that
+ *                               call each() replaced by the foreach they stand
+ *                               in for
+ *
+ * The first says what happens. The second says it is not "SMTP fails here". The
+ * third says it is not "this message cannot be sent". The fourth says it is
+ * those two lines and nothing else on the path.
+ *
+ * Nothing here needs a mail service, a credential or a network: the stand-ins
+ * are two files in the fixture's own document root, one bound to 127.0.0.1 and
+ * one writing to a file.
+ */
+
+t_group('mail sending against a local stand-in', function () {
+	foreach (mcm_mail_runtimes() as $runtime) {
+		if ($runtime['problem'] !== '') {
+			t_skip('the mail path on ' . $runtime['label'], $runtime['problem']);
+		}
+	}
+
+	$runtimes = mcm_mail_usable_runtimes();
+	foreach ($runtimes as $runtime) {
+		mcm_mail_cases($runtime);
+	}
+
+	if (count($runtimes) < 2) {
+		mcm_mail_print_matrix_notice($runtimes);
+		t_skip('the mail path on any other runtime', 'MCM_TEST_PHP names no other PHP CLI binary');
+	}
+});
+
+/**
+ * Every mail case, against one runtime.
+ *
+ * Written as a function rather than inline so that the matrix is the loop that
+ * calls it: what is asked of the runtime running the suite is exactly what is
+ * asked of every other one, and no case can quietly apply to only one of them.
+ */
+function mcm_mail_cases(array $runtime)
+{
+	$where   = ' [' . $runtime['label'] . ']';
+	$fixture = mcm_fixture('mail-' . preg_replace('/[^0-9a-z]+/i', '-', $runtime['label']));
+
+	/* 1. One send, watched from both ends ---------------------------------- */
+
+	// The stand-in is the patient kind here, because how long the visitor waits
+	// is part of what happened to them.
+	$stub = mcm_mail_stub_start($fixture);
+
+	try {
+		mcm_mail_configure($fixture, $stub);
+		$token   = mcm_mail_token();
+		$started = microtime(true);
+		$result  = mcm_mail_drive($fixture, $runtime, array('MCM_MAIL_TOKEN' => $token));
+		$elapsed = microtime(true) - $started;
+		$report  = $result['report'];
+
+		t_same($runtime['version'], mcm_at($report, 'php_version', ''), 'the send ran on the runtime this case names' . $where);
+		$has_each = (mcm_at($report, 'each_exists', '') === 'yes');
+		echo '  note  ' . $runtime['label'] . ': each() ' . ($has_each ? 'present' : 'absent')
+			. ', get_magic_quotes_runtime() ' . (mcm_at($report, 'get_magic_quotes_runtime_exists', '') === 'yes' ? 'present' : 'absent')
+			. sprintf(', one send took %.1fs', $elapsed) . "\n";
+		t_same('smtp', mcm_at($report, 'transport', ''), 'the fixture carries the SMTP configuration the example configuration recommends' . $where);
+
+		if ($has_each) {
+			// A runtime that still has each() is the one this library was
+			// written for. Nothing here says no runtime does: which runtimes do
+			// is the answer this group exists to give.
+			t_same('returned', mcm_at($report, 'attempt', ''), 'the send returns on a runtime that still has each()' . $where);
+			t_same('true', mcm_at($report, 'result', ''), 'and reports that it sent' . $where);
+			t_same(1, count(mcm_mail_messages($stub)), 'the stand-in received one complete message' . $where);
+			t_contains($token, implode("\n", mcm_mail_messages($stub)), "carrying this send's own activation link" . $where);
+		} else {
+			t_same('start', mcm_at($report, 'attempt', ''), 'the send never returns: it dies inside the call' . $where);
+			t_same(1, $result['status'], 'the request ends the way an unhandled failure ends' . $where);
+			t_contains(mcm_generic_message(), $result['stdout'], 'the visitor is told only the generic message' . $where);
+			t_contains('Call to undefined function each()', $result['log'], 'the log names the function the runtime does not have' . $where);
+			t_contains('class.smtp.php', $result['log'], 'and the file that calls it' . $where);
+			t_contains('SMTP->Data()', $result['log'], 'and the step of a send it was called from' . $where);
+
+			$commands = mcm_mail_commands($stub);
+			t_ok(in_array('MAIL', $commands, true), 'the send got as far as naming a sender' . $where, implode(' ', $commands));
+			t_ok(in_array('RCPT', $commands, true), 'and a recipient' . $where, implode(' ', $commands));
+			t_ok(in_array('DATA', $commands, true), 'and asked to send the message' . $where, implode(' ', $commands));
+			t_same(array(), mcm_mail_messages($stub), 'and no message was ever delivered' . $where);
+			t_same(1, mcm_mail_aborted($stub), 'the message was abandoned where the call died' . $where);
+			t_ok(!in_array('QUIT', $commands, true), 'the connection was never closed as a command either' . $where, implode(' ', $commands));
+
+			// Why the visitor waits: the library's own clean-up says "quit", but
+			// a server part way through a message can only read that as one more
+			// line of it, so nothing answers and the client waits out its own
+			// ten-second timeout before the failure page appears.
+			t_ok(in_array('body quit', mcm_mail_transcript($stub), true), "the library's parting command arrived as message content" . $where, implode(' | ', mcm_mail_transcript($stub)));
+			t_ok($elapsed >= 5.0, 'the visitor waits out an SMTP timeout before being told anything' . $where, sprintf('the send took %.2fs', $elapsed));
+		}
+
+		// However the runtime handled it, the credential went to the stand-in
+		// and nowhere else: not to the visitor, and not into the log.
+		t_lacks(mcm_mail_password(), $result['stdout'], 'the configured credential never reaches the client' . $where);
+		t_lacks(mcm_mail_password(), $result['log'], 'and never reaches the log' . $where);
+		t_contains(base64_encode(mcm_mail_password()), implode("\n", mcm_mail_transcript($stub)), 'the one place it went is the stand-in on the loopback interface' . $where);
+	} catch (Throwable $error) {
+		mcm_mail_stub_stop($stub);
+		throw $error;
+	}
+	mcm_mail_stub_stop($stub);
+
+	$expected = mcm_at($report, 'attempt', '') . '/' . $result['status'];
+	$has_each = (mcm_at($report, 'each_exists', '') === 'yes');
+
+	/* 2. The same send again, and the other caller ------------------------- */
+
+	// A stand-in that does not make the client wait out its timeout: the wait is
+	// established above, and every send after it would otherwise pay it again.
+	$stub = mcm_mail_stub_start($fixture, array('abandoned' => 'close', 'name' => 'smtp-brief'));
+
+	try {
+		mcm_mail_configure($fixture, $stub);
+
+		// Repeatability is part of the answer: a failure that happened once says
+		// less than one that happens every time, and a visitor who tries again
+		// is the person who meets it a second time.
+		$repeat = array();
+		for ($attempt = 0; $attempt < 3; $attempt++) {
+			$again    = mcm_mail_drive($fixture, $runtime, array('MCM_MAIL_TOKEN' => mcm_mail_token()));
+			$repeat[] = mcm_at($again['report'], 'attempt', '') . '/' . $again['status'];
+		}
+		t_same(array($expected, $expected, $expected), $repeat, 'the same send does the same thing every time' . $where);
+		t_same($has_each ? 3 : 0, count(mcm_mail_messages($stub)), 'and delivers the same amount every time' . $where);
+
+		// The other caller, and the other message: same library, same step.
+		mcm_mail_stub_reset($stub);
+		$reset = mcm_mail_drive($fixture, $runtime, array(
+			'MCM_MAIL_PATH'  => 'password_reset',
+			'MCM_MAIL_USER'  => 'resetuser',
+			'MCM_MAIL_TOKEN' => mcm_mail_token(),
+		));
+		t_same($expected, mcm_at($reset['report'], 'attempt', '') . '/' . $reset['status'], 'the password reset mail ends the way the verification mail does' . $where);
+		t_same($has_each ? 1 : 0, count(mcm_mail_messages($stub)), 'and delivers exactly as much of a message' . $where);
+	} catch (Throwable $error) {
+		mcm_mail_stub_stop($stub);
+		throw $error;
+	}
+	mcm_mail_stub_stop($stub);
+
+	/* 3. The same path, refused politely one step earlier ------------------ */
+
+	// The disconfirming case. If "SMTP does not work on this runtime" were the
+	// explanation, this would fail the same way. It does not: refused before the
+	// message body, the send returns false and the caller is told so.
+	$refusing = mcm_mail_stub_start($fixture, array('reject' => 'data', 'name' => 'smtp-refusing'));
+
+	try {
+		mcm_mail_configure($fixture, $refusing);
+		$refused = mcm_mail_drive($fixture, $runtime, array('MCM_MAIL_TOKEN' => mcm_mail_token()));
+
+		t_same('returned', mcm_at($refused['report'], 'attempt', ''), 'a refusal one step earlier returns instead of dying' . $where);
+		t_same('false', mcm_at($refused['report'], 'result', ''), 'and reports that it did not send' . $where);
+		t_same(0, $refused['status'], 'the page finishes normally' . $where);
+		t_lacks('Call to undefined function', $refused['log'], 'nothing about the runtime is involved in this one' . $where);
+		t_contains('Verification Mail NOT successfully sent', mcm_at($refused['report'], 'errors_json', ''), 'the caller gets the message it keeps for a failed send' . $where);
+		t_ok(in_array('DATA', mcm_mail_commands($refusing), true), 'the refusal happened at DATA' . $where, implode(' ', mcm_mail_commands($refusing)));
+		t_same(0, mcm_mail_aborted($refusing), 'so no message was begun and abandoned' . $where);
+	} catch (Throwable $error) {
+		mcm_mail_stub_stop($refusing);
+		throw $error;
+	}
+	mcm_mail_stub_stop($refusing);
+
+	/* 4. The other transport, delivered ------------------------------------ */
+
+	// The proven path, for comparison: the same PHPMailer, the same runtime and
+	// the same message, over the transport the site can be set to instead. It
+	// arrives. So neither the message nor the library as a whole is what fails.
+	mcm_mail_configure($fixture, null);
+	$token  = mcm_mail_token();
+	$posted = mcm_mail_drive(
+		$fixture,
+		$runtime,
+		array('MCM_MAIL_TOKEN' => $token),
+		mcm_mail_sendmail_ini($fixture, $runtime['binary'])
+	);
+
+	t_same('mail', mcm_at($posted['report'], 'transport', ''), 'the fixture is on the mail() transport now' . $where);
+	t_same('returned', mcm_at($posted['report'], 'attempt', ''), 'the send returns' . $where);
+	t_same('true', mcm_at($posted['report'], 'result', ''), 'and reports that it sent' . $where);
+	t_same('', $posted['log'], 'and logs nothing at all' . $where);
+	$delivered = mcm_mail_mailbox_messages($fixture);
+	t_same(1, count($delivered), 'one message reached the local mailbox' . $where);
+	t_contains($token, implode("\n", $delivered), "carrying this send's own activation link" . $where);
+	t_contains('Account Activation', implode("\n", $delivered), 'and the subject the configuration names' . $where);
+
+	/* 5. The smallest change that could make the difference ---------------- */
+
+	// A second fixture, because this one's copy of the library is rewritten: the
+	// two each() loops become the foreach they stand in for, and nothing else
+	// changes. Whatever the send does now is what those two lines were doing.
+	$patched = mcm_fixture('mail-rewritten-' . preg_replace('/[^0-9a-z]+/i', '-', $runtime['label']));
+	$stub    = mcm_mail_stub_start($patched, array('abandoned' => 'close'));
+
+	try {
+		t_same(2, mcm_mail_rewrite_each($patched), 'the fixture copy of the SMTP library had exactly two each() loops to rewrite' . $where);
+
+		mcm_mail_configure($patched, $stub);
+		$token   = mcm_mail_token();
+		$fixed   = mcm_mail_drive($patched, $runtime, array('MCM_MAIL_TOKEN' => $token));
+		$arrived = mcm_mail_messages($stub);
+
+		t_same('returned', mcm_at($fixed['report'], 'attempt', ''), 'with those two loops rewritten the send returns' . $where);
+		t_same('true', mcm_at($fixed['report'], 'result', ''), 'and reports that it sent' . $where);
+		t_same('', $fixed['log'], 'and logs nothing at all' . $where);
+		t_same(1, count($arrived), 'the stand-in received one complete message' . $where);
+		t_contains($token, implode("\n", $arrived), "carrying this send's own activation link" . $where);
+		t_same(0, mcm_mail_aborted($stub), 'and nothing was abandoned' . $where);
+	} catch (Throwable $error) {
+		mcm_mail_stub_stop($stub);
+		throw $error;
+	}
+	mcm_mail_stub_stop($stub);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * What a failed send leaves behind
+ * ---------------------------------------------------------------------------
+ *
+ * inc/classes/Registration.php inserts the new account, sends the verification
+ * mail, and deletes the account again only when the send returns false. Whether
+ * that compensation ever runs is therefore a question about how the send fails,
+ * and the answer is a row - so these cases need a real database and skip with
+ * it, exactly as the rest of the database group does.
+ *
+ * Two failures are driven against the same fixture, and the difference between
+ * them is the whole finding: a send refused by the far end returns false and
+ * the account is cleaned up, while a send that dies never returns at all, so
+ * the delete is never reached and the account stays. Every case snapshots the
+ * table before and after, because "the visitor was told it failed" and "nothing
+ * was written" are different claims.
+ */
+
+t_group('registration after a failed send over a real database', function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		$reason = mcm_db_skip_reason();
+		t_skip('what a failed send leaves behind', $reason);
+		mcm_db_print_skip($reason);
+		return;
+	}
+
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded for the failed-send cases')) {
+		return;
+	}
+
+	foreach (mcm_mail_usable_runtimes() as $runtime) {
+		mcm_mail_registration_cases($runtime, $server);
+	}
+});
+
+/**
+ * What a failed send leaves behind, against one runtime and one real database.
+ *
+ * The stand-in here is the impatient kind: how long the visitor waits is
+ * established by the group above, and every request in this one would otherwise
+ * pay that wait again.
+ */
+function mcm_mail_registration_cases(array $runtime, array $server)
+{
+	$where   = ' [' . $runtime['label'] . ']';
+	$slug    = preg_replace('/[^0-9a-z]+/i', '-', $runtime['label']);
+	$session = 'ddddeeeeffff1111222233334444aaaa';
+	$captcha = 'abcd';
+	$fixture = mcm_db_fixture('mail-register-' . $slug, $server);
+
+	// The captcha is checked against the session before anything else happens,
+	// so a registration that is meant to reach the mail path has to carry one.
+	mcm_seed_session($fixture, $session, array('captcha' => $captcha));
+	$as_visitor = array('Cookie: PHPSESSID=' . $session);
+
+	$form = array(
+		'register'             => '1',
+		'user_name'            => 'newvisitor',
+		'user_email'           => 'newvisitor@example.test',
+		'user_password_new'    => 'p' . bin2hex(random_bytes(6)),
+		'user_password_repeat' => '',
+		'captcha'              => $captcha,
+	);
+	$form['user_password_repeat'] = $form['user_password_new'];
+
+	$stub = mcm_mail_stub_start($fixture, array('abandoned' => 'close'));
+	$app  = null;
+
+	try {
+		mcm_mail_db_configure($fixture, $server, $stub);
+		$app = mcm_server_start($fixture, array('binary' => $runtime['binary']));
+		$pdo = mcm_db_reset($server);
+
+		/* 1. A send that dies -------------------------------------------- */
+
+		$before   = mcm_db_snapshot($pdo, 'SELECT user_id, user_name, user_email, user_active FROM users ORDER BY user_id');
+		$response = mcm_http_post($app, '/register.php', $form, $as_visitor);
+		$after    = mcm_db_snapshot($pdo, 'SELECT user_id, user_name, user_email, user_active FROM users ORDER BY user_id');
+		$row      = mcm_db_user_row($pdo, 'newvisitor');
+
+		t_same(array(), $before, 'the table starts empty' . $where);
+
+		$died = (count(mcm_mail_messages($stub)) === 0);
+		if (!$died) {
+			// A runtime that can finish a send registers the visitor normally.
+			// The interesting case is the other one, and which runtimes are in
+			// which state is what the matrix is for.
+			t_same(200, $response['status'], 'a send that completes registers the visitor' . $where);
+			t_same(1, count($after), 'and leaves the account it created' . $where);
+			t_same('0', (string) mcm_at($row, 'user_active', ''), 'unactivated until the link in the mail is followed' . $where);
+			t_contains('we have sent you an email', $response['body'], 'and the visitor is told to look for it' . $where);
+		} else {
+			t_same(500, $response['status'], 'a send that dies takes the whole request with it' . $where);
+			t_contains(mcm_generic_message(), $response['body'], 'and the visitor is told only the generic message' . $where);
+			t_lacks('could not send you an verification mail', $response['body'], 'never the message the page keeps for a failed send' . $where);
+			t_contains('Call to undefined function each()', $response['log'], 'the reason is in the log, where only an operator sees it' . $where);
+
+			// The finding: the account was written, the compensating delete was
+			// never reached, and what is left is an account nobody can activate,
+			// because the mail carrying its activation link never went anywhere.
+			t_same(1, count($after), 'the account it created is still there afterwards' . $where);
+			t_same('newvisitor', (string) mcm_at($row, 'user_name', ''), 'under the name the visitor asked for' . $where);
+			t_same('0', (string) mcm_at($row, 'user_active', ''), 'never activated' . $where);
+			t_ok(mcm_at($row, 'user_activation_hash', null) !== null, 'holding an activation code' . $where, var_export(mcm_at($row, 'user_activation_hash', null), true));
+			t_same(array(), mcm_mail_messages($stub), 'that no message ever carried' . $where);
+
+			/* 2. And what that costs the visitor next time ----------------- */
+
+			$again = mcm_http_post($app, '/register.php', $form, $as_visitor);
+			t_same(200, $again['status'], 'a second attempt with the same details is answered normally' . $where);
+			t_contains('that username is already taken', $again['body'], 'and refused: the name is taken by the account the first attempt left' . $where);
+			t_same(1, count(mcm_db_snapshot($pdo, 'SELECT user_id FROM users')), 'the refusal adds nothing' . $where);
+
+			$other              = $form;
+			$other['user_name'] = 'newvisitortwo';
+			$third              = mcm_http_post($app, '/register.php', $other, $as_visitor);
+			t_same(200, $third['status'], 'a third attempt under another name is answered normally' . $where);
+			t_contains('already registered', $third['body'], 'and refused too: the address is taken by that same account' . $where);
+			t_same(1, count(mcm_db_snapshot($pdo, 'SELECT user_id FROM users')), 'that refusal adds nothing either' . $where);
+		}
+	} catch (Throwable $error) {
+		if ($app !== null) {
+			mcm_server_stop($app);
+		}
+		mcm_mail_stub_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_mail_stub_stop($stub);
+
+	/* 3. The control: a send the far end refuses -------------------------- */
+
+	// Same page, same runtime, same account details. The only difference is that
+	// the far end refuses the message instead of the client dying on it, so the
+	// send returns false - and the delete that returning false was there to
+	// reach runs.
+	$refusing = mcm_mail_stub_start($fixture, array('reject' => 'data', 'name' => 'smtp-refusing'));
+	$app      = null;
+
+	try {
+		mcm_mail_db_configure($fixture, $server, $refusing);
+		$app = mcm_server_start($fixture, array('binary' => $runtime['binary']));
+		$pdo = mcm_db_reset($server);
+
+		$response = mcm_http_post($app, '/register.php', $form, $as_visitor);
+		$after    = mcm_db_snapshot($pdo, 'SELECT user_id, user_name, user_email, user_active FROM users ORDER BY user_id');
+
+		t_same(200, $response['status'], 'a refused send leaves the page able to answer' . $where);
+		t_contains('could not send you an verification mail', $response['body'], 'the visitor is told the mail could not be sent' . $where);
+		t_contains('has NOT been created', $response['body'], 'and that the account was not created' . $where);
+		t_same(array(), $after, 'which is true: the account it created was deleted again' . $where);
+
+		// And because it was really deleted, the visitor can try again.
+		$retry = mcm_http_post($app, '/register.php', $form, $as_visitor);
+		t_lacks('that username is already taken', $retry['body'], 'so a second attempt is not refused as a duplicate' . $where);
+		t_same(array(), mcm_db_snapshot($pdo, 'SELECT user_id FROM users'), 'and it too cleans up after itself' . $where);
+	} catch (Throwable $error) {
+		if ($app !== null) {
+			mcm_server_stop($app);
+		}
+		mcm_mail_stub_stop($refusing);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_mail_stub_stop($refusing);
+
+	/* 4. The password reset request, which writes before it sends ---------- */
+
+	// The other page that sends. It writes the reset code first and sends
+	// afterwards, so the same death leaves an account holding a reset code that
+	// nobody was ever told - harmless, but it is what happened, and the visitor
+	// is left with a page that failed rather than one telling them to check
+	// their mail.
+	$stub = mcm_mail_stub_start($fixture, array('abandoned' => 'close', 'name' => 'smtp-reset'));
+	$app  = null;
+
+	try {
+		mcm_mail_db_configure($fixture, $server, $stub);
+		$app = mcm_server_start($fixture, array('binary' => $runtime['binary']));
+		$pdo = mcm_db_reset($server);
+		mcm_db_seed_user($pdo, 'resetvisitor', 'p' . bin2hex(random_bytes(6)));
+
+		$response = mcm_http_post($app, '/password_reset.php', array(
+			'request_password_reset' => '1',
+			'user_name'              => 'resetvisitor',
+		), $as_visitor);
+		$row = mcm_db_user_row($pdo, 'resetvisitor');
+
+		$died = (count(mcm_mail_messages($stub)) === 0);
+		if (!$died) {
+			t_same(200, $response['status'], 'a send that completes answers the visitor' . $where);
+			t_contains('successfully sent', $response['body'], 'and tells them the mail is on its way' . $where);
+		} else {
+			t_same(500, $response['status'], 'a reset request whose send dies takes the request with it' . $where);
+			t_contains(mcm_generic_message(), $response['body'], 'and the visitor is told only the generic message' . $where);
+			t_same(array(), mcm_mail_messages($stub), 'no reset mail was delivered' . $where);
+			t_ok(mcm_at($row, 'user_password_reset_hash', null) !== null, 'and the reset code was written before the send was attempted' . $where, var_export(mcm_at($row, 'user_password_reset_hash', null), true));
+		}
+	} catch (Throwable $error) {
+		if ($app !== null) {
+			mcm_server_stop($app);
+		}
+		mcm_mail_stub_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_mail_stub_stop($stub);
+}

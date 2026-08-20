@@ -544,8 +544,13 @@ function mcm_session_files(array $fixture)
  * The ini settings every fixture process runs with, as "-d name=value"
  * arguments. They stand in for what the web server provides, and never override
  * anything the bootstrap sets.
+ *
+ * @param array $extra settings a case needs on top of these, for something the
+ *                     application cannot be told about any other way - the mail
+ *                     cases set sendmail_path, which is PHP_INI_SYSTEM and so
+ *                     cannot be reached with ini_set() from a page
  */
-function mcm_ini_args(array $fixture)
+function mcm_ini_args(array $fixture, array $extra = array())
 {
 	$ini = array(
 		// Everything the application logs must land in the fixture's own file,
@@ -559,6 +564,7 @@ function mcm_ini_args(array $fixture)
 		// A collection pass mid-run would delete the seeded session file.
 		'session.gc_probability' => '0',
 	);
+	$ini = $extra + $ini;
 
 	$args = '';
 	foreach ($ini as $name => $value) {
@@ -570,17 +576,22 @@ function mcm_ini_args(array $fixture)
 /**
  * Run one page, named relative to the document root, as a child process.
  *
- * @param array $env extra environment variables for the page, so a case can
- *                   hand it a value - a stored password hash, a cookie issued
- *                   by an older version of the site - without writing it into
- *                   the fixture.
+ * @param array $env     extra environment variables for the page, so a case can
+ *                       hand it a value - a stored password hash, a cookie
+ *                       issued by an older version of the site - without
+ *                       writing it into the fixture.
+ * @param array $options binary - a PHP CLI other than the one running the
+ *                       suite, which is how the mail cases ask the same
+ *                       question of several runtimes; ini - extra ini settings,
+ *                       as mcm_ini_args() takes them
  * @return array status, stdout, log
  */
-function mcm_cli(array $fixture, $script, array $env = array())
+function mcm_cli(array $fixture, $script, array $env = array(), array $options = array())
 {
+	$options += array('binary' => PHP_BINARY, 'ini' => array());
 	file_put_contents($fixture['log'], '');
 
-	$command = escapeshellarg(PHP_BINARY) . mcm_ini_args($fixture) . ' ' . escapeshellarg($fixture['public'] . '/' . $script);
+	$command = escapeshellarg($options['binary']) . mcm_ini_args($fixture, $options['ini']) . ' ' . escapeshellarg($fixture['public'] . '/' . $script);
 	$pipes   = array();
 	$output  = array('file', $fixture['root'] . '/stderr.log', 'a');
 	// proc_open() replaces the whole environment rather than adding to it, so
@@ -612,10 +623,16 @@ function mcm_cli(array $fixture, $script, array $env = array())
  */
 $GLOBALS['mcm_servers'] = array();
 
-/** Start PHP's built-in server on a fixture, on a port the system picks. */
-function mcm_server_start(array $fixture)
+/**
+ * Start PHP's built-in server on a fixture, on a port the system picks.
+ *
+ * @param array $options binary and ini, as mcm_cli() takes them
+ */
+function mcm_server_start(array $fixture, array $options = array())
 {
 	static $handle = 0;
+
+	$options += array('binary' => PHP_BINARY, 'ini' => array());
 
 	$socket = @stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
 	if (!$socket) {
@@ -628,7 +645,7 @@ function mcm_server_start(array $fixture)
 	// "exec" matters: without it the shell that proc_open spawns is what gets
 	// signalled, the server survives as an orphan and the suite hangs waiting
 	// for a port that never frees.
-	$command = 'exec ' . escapeshellarg(PHP_BINARY) . mcm_ini_args($fixture)
+	$command = 'exec ' . escapeshellarg($options['binary']) . mcm_ini_args($fixture, $options['ini'])
 		. ' -S 127.0.0.1:' . $port . ' -t ' . escapeshellarg($fixture['public']);
 
 	// The server's own chatter goes to a file rather than a pipe, which nobody
