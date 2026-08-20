@@ -1,0 +1,13 @@
+{
+	"name": "jareddgotte/mcm",
+	"description": "Movie Collection Manager (MCM), a legacy PHP movie-collection manager. This manifest is for development tooling only; the site itself loads no Composer-managed code.",
+	"license": "Apache-2.0",
+	"type": "project",
+	"require": {},
+	"require-dev": {
+		"php": ">=8.1.0 <8.5.0"
+	},
+	"config": {
+		"sort-packages": true
+	}
+}
