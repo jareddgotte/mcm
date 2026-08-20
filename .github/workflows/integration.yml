@@ -1,0 +1,139 @@
+# The longer tier, after a merge and once a week.
+#
+# Like fast.yml this is a wrapper: what it runs is
+# tools/quality/integration.sh, the same script a developer runs. What it adds
+# is the three things that script cannot conjure and will otherwise skip out
+# loud - a real Chromium, further PHP CLI binaries for the mail check, and a
+# database server binary - and then --require, so that a run which lost one of
+# them fails here instead of going quietly green with a third of its coverage
+# missing.
+#
+# It does not run on a pull request on purpose. It takes minutes, and the point
+# of the split is that a small change never waits on it. It runs after a merge,
+# on a weekly schedule, and whenever somebody asks for it; a reviewer who wants
+# it on a branch before merging asks for it with the run-workflow button and
+# points at the run.
+#
+# It reaches neither TMDb nor the live site: every outbound request in the
+# suite goes to a stand-in inside the run's own throw-away fixture, the mail
+# path ends at a stand-in bound to 127.0.0.1, and the database server is a
+# private instance created and destroyed by the run. It deploys nothing and
+# needs no secret.
+#
+# PHP 8.3 is the target and gates. PHP 8.5 never gates: seven assertions fail
+# there today - the captcha's relative font path and a cast the vendored mail
+# library uses that 8.5 deprecates - and those are the site's own defects,
+# recorded rather than silenced. See AGENTS.md.
+
+name: integration checks
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: integration checks (PHP ${{ matrix.php }}, ${{ matrix.role }})
+    runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.gating == false }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '8.3'
+            role: target
+            gating: true
+          - php: '8.5'
+            role: forward-compatibility evidence, never gates
+            gating: false
+    steps:
+      - name: check out the change
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Three runtimes, because what a send does is decided by the runtime and
+      # one runtime is one data point. The last one installed is the one on
+      # PATH, so the tier itself runs on the version this job is for; the other
+      # two are named to the mail check through MCM_TEST_PHP.
+      - name: install PHP 8.1, for the mail matrix
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.1'
+          coverage: none
+      - name: install PHP 8.4, for the mail matrix
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          coverage: none
+      - name: install PHP ${{ matrix.php }}, the runtime under test
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      # A missing binary here would show up only as the mail check quietly
+      # covering one runtime, which is exactly the failure this tier exists to
+      # prevent. So it is checked before anything runs.
+      - name: name the other runtimes to the mail check
+        run: |
+          set -eu
+          for binary in /usr/bin/php8.1 /usr/bin/php8.4; do
+            test -x "$binary" || { echo "missing $binary"; exit 1; }
+            "$binary" -v | head -1
+          done
+          echo "MCM_TEST_PHP=/usr/bin/php8.1:/usr/bin/php8.4" >> "$GITHUB_ENV"
+          echo "MCM_QUALITY_CACHE=$HOME/.cache/mcm-quality" >> "$GITHUB_ENV"
+
+      - name: install the pinned tool tree
+        run: composer install --no-interaction --no-progress
+
+      - name: install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      # Playwright and the Chromium build it downloads are both pinned by
+      # tests/browser/package-lock.json.
+      - name: install the pinned browser
+        working-directory: tests/browser
+        run: |
+          set -eu
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # The server binary is pinned by version and checksum in
+      # tools/quality/fetch-mariadb.sh. Cached because it is large and never
+      # changes between runs.
+      - name: restore the pinned database server
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/mcm-quality
+          key: mcm-mariadb-11.4.4
+
+      - name: fetch the pinned database server
+        run: echo "MCM_TEST_MYSQLD=$(tools/quality/fetch-mariadb.sh)" >> "$GITHUB_ENV"
+
+      - name: run the longer tier
+        env:
+          MCM_QUALITY_REQUIRE: browser,database,mail-runtimes,phpunit
+        run: tools/quality/integration.sh
+
+      - name: keep the recorded result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-php${{ matrix.php }}
+          path: |
+            build/quality/integration
+            build/logs/junit.xml
+          if-no-files-found: warn

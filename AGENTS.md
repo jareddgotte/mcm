@@ -29,10 +29,14 @@ and the site itself pulls in no Composer package.
     named after the group so `--filter` means the same under both.
   - Both must stay green, and their assertion counts must agree. On the current
     baseline that is 2709 without a database server, where the database group's
-    8 cases skip loudly, and 3302 with one and nothing skipped. Measure a new
-    baseline from an actual run of both rather than deriving it by arithmetic:
-    the two numbers are what catch a group that quietly stopped being reached
-    under one runner, which is the one failure a green run looks exactly like.
+    8 cases skip loudly, and 3302 with one and nothing skipped - both with
+    `MCM_TEST_PHP` naming two further runtimes, which is where 88 of those
+    assertions come from; with none named the first number is 2621 and there
+    are 9 skips, the extra one being the mail matrix. Measure a new baseline
+    from an actual run of both rather than deriving it by arithmetic: the two
+    numbers are what catch a group that quietly stopped being reached under one
+    runner, which is the one failure a green run looks exactly like, and
+    `runners-agree` in the longer tier is what compares them on every run.
 - Groups are selectable by name and by tag under both. A group declares the one
   highest thing it needs - `source`, `fixture`, `server` or `database`, see
   `mcm_requirement_tags()` - and never a set of them: the PHPUnit bridge has a
@@ -87,10 +91,16 @@ and the site itself pulls in no Composer package.
 - Known, unfixed, and surfaced by the suite: on PHP 8.5 `imagefttext()` no
   longer accepts a relative font path, so the captcha's
   `'../fonts/times_new_yorker.ttf'` in `inc/showCaptcha.php` stops rendering
-  and logs a font warning. An absolute path still works. The suite is green on
-  8.1, 8.3 and 8.4 and fails exactly this one assertion on 8.5; that failure is
-  the site's, not the harness's, and the assertion stays as it is until the
-  captcha is fixed.
+  and logs a font warning. An absolute path still works. A second one sits
+  beside it: `inc/libs/PHPMailer.php:776` and `:779` use a `(boolean)` cast,
+  which 8.5 deprecates, and the deprecation lands in the error log - which is
+  enough to fail the cases asserting a page logged nothing at all. The suite is
+  green on 8.1, 8.3 and 8.4 and fails twelve assertions on 8.5 with a database
+  server and seven without one, two of them the captcha's and the rest the
+  deprecation reaching a log a case asserts is empty; both defects are the
+  site's, not the harness's, and the assertions stay as they are until the
+  captcha names its font absolutely and the vendored mail library is dealt
+  with.
 - A database outage is simulated without a database: the fixture's `DB_HOST`
   reaches the DSN verbatim, so `127.0.0.1;port=1` pins a port nothing can be
   listening on and the driver refuses the connection exactly as it would during
@@ -188,6 +198,56 @@ and the site itself pulls in no Composer package.
   point cannot show. `mcm_cli()` and `mcm_server_start()` take a `binary` for
   that, and an `ini` beside it because `sendmail_path` is `PHP_INI_SYSTEM` and
   so cannot be reached with `ini_set()` from a page.
+
+## Quality checks
+
+- Two tiers, one script each, and every check belongs to exactly one of them.
+  `tools/quality/fast.sh` is what comes back while a change is being read:
+  the `php -l` sweep over every tracked PHP file, the reserved lint lane, the
+  credential and example-configuration groups run by name, and the `quick`
+  groups under both runners. It needs a PHP CLI and, for one check, the
+  Composer tree; it opens no socket. `tools/quality/integration.sh` is the
+  rest: the real-browser page, every group under both runners, the two runners'
+  assertion counts against each other, and the mail and database coverage that
+  needs more than a PHP process. Both write `build/quality/<tier>/summary.txt`
+  plus one log per check, and the header comment in each script is the
+  authoritative description of what it runs and what a failure there means.
+- `.github/workflows/fast.yml` and `.github/workflows/integration.yml` are
+  wrappers and must stay wrappers: they install prerequisites and then call
+  those scripts. Put a new check in the script, never in the workflow, or the
+  two stop being the same tier. Fast runs on every pull request and push to
+  `master`; the longer one runs after a merge, weekly, and on request, and
+  deliberately not on a pull request.
+- A missing browser, database server or second PHP runtime is a loud skip and
+  never a quiet green: the summary grows a `not covered by this run` section
+  quoting the suite's own words for what went unlooked-for. `--require` (or
+  `MCM_QUALITY_REQUIRE`) turns those skips into failures, and the automated run
+  passes `browser,database,mail-runtimes,phpunit` for exactly that reason.
+  `q_coverage()` in `tools/quality/lib.sh` decides that from what the run
+  printed rather than from what the machine has installed - the question worth
+  recording is whether the groups ran, not whether a binary exists.
+- The lint lane is created empty and reports `RESERVED`, never `PASS`. Which
+  formatter, indentation width, static analyser and rule set fill it is a
+  separate decision; `.editorconfig` is an input to it rather than the answer.
+  A lane that reported a pass would be indistinguishable from one that had
+  checked something.
+- Everything the checks use is pinned: the actions by commit, PHPUnit by
+  `composer.lock`, Playwright and its Chromium by
+  `tests/browser/package-lock.json`, the database server by version and SHA-256
+  in `tools/quality/fetch-mariadb.sh`, and the PHP minor by the workflow. That
+  fetch script is the only thing under `tools/quality/` that downloads
+  anything, and no check calls it.
+- PHP 8.3 is the target and the run that speaks for the project. 8.1 and 8.4
+  gate as well but are compatibility evidence, not targets. 8.5 never gates and
+  its jobs are marked so: twelve assertions fail there with a database server
+  and seven without one - the captcha font path, and `(boolean)` casts at
+  `inc/libs/PHPMailer.php:776` and `:779` that 8.5 deprecates into the error
+  log, which fails every check asserting a page logged nothing. Both are the
+  site's defects and neither may be silenced to obtain a green.
+- The checks never deploy, add no secret, reach neither TMDb nor the live site,
+  and requiring one before a merge is a repository setting nobody has turned
+  on. `php tests/run.php` is not retired by any of this and stays supported as
+  what the fast tier's `suite-quick` check runs.
 
 ## Mail sending
 
