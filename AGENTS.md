@@ -5,8 +5,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## What this project is
 
 A legacy PHP movie-collection manager built on the php-login script. There is no
-dependency manager and no build step; the `.php` files in the document root are
-the application. Setup is documented in `README.md`.
+build step; the `.php` files in the document root are the application. Setup is
+documented in `README.md`. `composer.json` / `composer.lock` exist for
+development tooling only - see [Development tooling](#development-tooling) -
+and the site itself pulls in no Composer package.
 
 ## Tests
 
@@ -118,6 +120,23 @@ the application. Setup is documented in `README.md`.
   re-seed instead of rolling back, and `users.user_registration_datetime`
   defaults to a zero date that a `NO_ZERO_DATE` server refuses - the dump's own
   `SET SQL_MODE` line is what makes it loadable. `README.md` has the detail.
+
+## Development tooling
+
+- `composer.json` and `composer.lock` are development tooling only: `require`
+  stays empty because nothing the site serves is a Composer package, and
+  anything Composer manages lives under `require-dev`. `php tests/run.php`
+  needs nothing installed and gives the same assertion count with or without a
+  `/vendor` tree, so Composer is optional and never a precondition for the
+  suite.
+- `composer.lock` is committed so `composer install` resolves the same tool
+  versions every time; `/vendor` is git-ignored and safe to delete. Run
+  `composer validate --strict` after editing `composer.json`.
+- PHP 8.3 is this project's modernization target (see Tests above); the
+  `require-dev.php` constraint bounds Composer usage to the range the suite is
+  actually exercised on, `>=8.1.0 <8.5.0`. A newer PHP is forward-compatibility
+  evidence, never the target, and 8.5 is deliberately outside the constraint
+  because of the captcha font regression noted above.
 
 ## Request lifecycle
 
