@@ -37,16 +37,51 @@ This repository contains a placeholder database schema and a placeholder configu
 The endpoints that change a list or a movie now accept only a POST that carries the session's own token, and the signed-in page hands that token to the browser.  Nothing needs configuring and nobody is signed out: the token is created the first time a session asks for one, so a visitor who was already signed in simply gets one the next time a page loads.  A collection page that was **already open** in a tab before the files changed does not have a token in it, and its buttons answer "you are not allowed to do that" until the page is reloaded once.  Public sharing links are untouched — they are not authenticated, ask for no token, and keep working.
 
 ### Tests
-Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  Every case works on a throw-away copy of the site under the system temp directory, so running the suite never touches your checkout or your configuration.  Add `--filter=<text>` to run a single group.
+There is one suite and there are two ways to run it.  The cases live in `/tests/cases.php`, written against the harness in `/tests/harness.php`, and both runners call the same closures — an assertion is written once and neither runner owns it.
+
+```
+php tests/run.php                    the dependency-free runner
+vendor/bin/phpunit                   PHPUnit 12
+```
+
+`php tests/run.php` needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  It runs on a checkout where Composer has never been run and gives the same assertion count either way.
+
+`vendor/bin/phpunit` needs `composer install` first.  It adds what another tool expects — test discovery, group selection and a machine-readable JUnit report, written to `/build/logs/junit.xml` on every run.
+
+Both work on a throw-away copy of the site under the system temp directory, so running either never touches your checkout or your configuration.
+
+**Which PHP each covers.**  PHP 8.3 is the modernization target and is where both runners are verified.  PHPUnit 12 is the newest major that supports 8.3, and it requires 8.3 or later, so it gates 8.3 and 8.4 and cannot say anything about 8.1 — which is why the dependency-free runner stays and is the one to reach for on an older runtime.  PHP 8.5 is forward evidence only and is not a target: the captcha's relative font path stops working there (see the note below), so a run on 8.5 fails that one assertion on purpose rather than being silenced.
+
+| | 8.1 | 8.3 (target) | 8.4 | 8.5 |
+|---|---|---|---|---|
+| `php tests/run.php` | covered | covered | covered | one known failure, not a target |
+| `vendor/bin/phpunit` | not supported by the tool | gates | gates | not gating |
+
+**Selecting groups.**  Every group declares what it needs — `source`, `fixture`, `server` or `database` — and carries a tier tag derived from that: `quick` for the groups that listen on no socket, `integration` for the rest.  Either runner will select on a name or on a tag, and the two agree on what they select:
+
+```
+php tests/run.php --list                 name every group and its tags
+php tests/run.php --group=quick          the quick tier alone
+php tests/run.php --filter=cookie        the groups whose name matches
+
+vendor/bin/phpunit --list-groups
+vendor/bin/phpunit --group quick
+vendor/bin/phpunit --filter cookie
+```
+
+Interrupting either runner leaves nothing behind: every built-in server and the optional database server are stopped, and the run's temporary directory is removed, on a normal end, an exception, a fatal and a signal alike.
+
+#### The known PHP 8.5 failure
+`imagefttext()` on PHP 8.5 no longer accepts a relative font path, and the captcha in `/inc/showCaptcha.php` names its font as `'../fonts/times_new_yorker.ttf'`.  So on 8.5 the captcha stops rendering and logs a font warning, and the suite fails exactly that one assertion.  That failure is the site's rather than the harness's, and it is left in place on purpose: the assertion stays as it is until the captcha is fixed, and 8.5 is recorded as forward evidence rather than treated as a target.  An absolute path is what will fix it.
 
 #### Development tooling (optional)
-`composer.json` and `composer.lock` exist for development tooling only — nothing the site loads is a Composer package, `require` stays empty, and `php tests/run.php` needs nothing installed to run and gives the same result whether or not you've ever run Composer.  Run `composer install` from a committed `composer.lock` if you want the pinned tool tree; it lands in `/vendor`, which is git-ignored and safe to delete at any time.
+`composer.json` and `composer.lock` exist for development tooling only — nothing the site loads is a Composer package, `require` stays empty, and `php tests/run.php` needs nothing installed to run and gives the same result whether or not you've ever run Composer.  Run `composer install` from the committed `composer.lock` if you want the pinned tool tree — PHPUnit, at one exact version — and it lands in `/vendor`, which is git-ignored and safe to delete at any time.  `/build` is generated the same way, by PHPUnit, and is equally disposable.
 
 #### The browser page
 The suite is a PHP one and drives no browser.  What a browser builds out of a hostile list name or movie title is answered by `/tests/browser/xss.html`, which you open by hand — in a browser directly, or over any local web server.  It renders a hostile list name, movie title, poster path and movie identifier through the real `/js/dom.js` and `/js/mc.js`, then reports what the document ended up holding; the summary at the top is green when every check passed.  Nothing is installed and no server is needed.
 
 #### The optional database group
-Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.
+Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so the suite runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run, and both runners behave the same way - under PHPUnit those groups are reported as skipped, with the same notice.
 
 The third kind is why the list endpoints are driven here as well: with rows to work on, the suite can sign in as a list's owner, as somebody else, and as nobody at all, and check the rows afterwards rather than only the response.  Without a database it still checks that an anonymous or malformed request is refused before a connection is opened.
 
@@ -58,6 +93,7 @@ To cover them, download a **MariaDB or MySQL binary tarball**, unpack it anywher
 
 ```
 MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd php tests/run.php
+MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd vendor/bin/phpunit
 ```
 
 A `mariadbd` or `mysqld` already on your `PATH`, or in the usual places a package puts one, is found without `MCM_TEST_MYSQLD`.  Nothing is installed and no service is started: the harness creates its own data directory, port, socket and credentials under the system temp directory, loads `/.your_database.sql` into it, and destroys all of it when the run ends.  The credentials are generated per run and exist nowhere else, and no application file changes — the server's address travels in `DB_HOST`, which the bootstrap already puts into the connection string verbatim, so `127.0.0.1;port=<port>` reaches it.

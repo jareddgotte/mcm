@@ -7,9 +7,12 @@ inc/config/config.php
 # copy an operator edits with real database details must never be committed.
 .your_database.sql
 
-# Generated / third-party artifacts
+# Generated / third-party artifacts. /vendor is what Composer installs for the
+# development tooling and is never served; /build is where PHPUnit writes its
+# cache and its machine-readable report.
 /vendor/
 /var/
+/build/
 
 # Logs
 *.log

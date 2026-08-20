@@ -30,8 +30,12 @@
  * The last two cover what the bootstrap's escaping helpers do with a hostile
  * string, and the bounded validation a submitted list name has to pass.
  *
- * The machinery they are written against lives in tests/run.php, and the
- * database group's own in tests/database.php.
+ * The machinery they are written against lives in tests/harness.php, and the
+ * database group's own in tests/database.php. Two runners consume what is
+ * registered here and neither owns it: tests/run.php, which needs a PHP CLI and
+ * nothing else, and tests/phpunit/, which needs PHPUnit. A group's second
+ * argument says what it needs to run - see mcm_requirement_tags() - and both
+ * runners select on those tags.
  */
 
 /*
@@ -40,7 +44,7 @@
  * ---------------------------------------------------------------------------
  */
 
-t_group('configuration', function () {
+t_group('configuration', array('server'), function () {
 	$fixture = mcm_fixture('config-defaults');
 	$result  = mcm_cli($fixture, 'probe.php');
 	$report  = mcm_report($result['stdout']);
@@ -161,7 +165,7 @@ t_group('configuration', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('single session startup', function () {
+t_group('single session startup', array('server'), function () {
 	$bootstrap = MCM_REPO_ROOT . '/inc/bootstrap.php';
 	$source    = file_get_contents($bootstrap);
 
@@ -232,7 +236,7 @@ t_group('single session startup', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('session cookie attributes', function () {
+t_group('session cookie attributes', array('server'), function () {
 	$fixture = mcm_fixture('cookies');
 	$server  = mcm_server_start($fixture);
 
@@ -299,7 +303,7 @@ t_group('session cookie attributes', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('existing session compatibility', function () {
+t_group('existing session compatibility', array('server'), function () {
 	$fixture  = mcm_fixture('existing-sessions');
 	$existing = '1234567890abcdef1234567890abcdef';
 	$forged   = 'ffffffff00000000ffffffff00000000';
@@ -348,7 +352,7 @@ t_group('existing session compatibility', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('error handling', function () {
+t_group('error handling', array('server'), function () {
 	$fixture = mcm_fixture('errors');
 	$seed    = $fixture['seed'];
 	$server  = mcm_server_start($fixture);
@@ -449,7 +453,7 @@ t_group('error handling', function () {
  * is what a request asks for, and must never come back.
  */
 
-t_group('canonical host and https', function () {
+t_group('canonical host and https', array('server'), function () {
 	$canonical = 'movies.example.test';
 	$origin    = 'https://' . $canonical;
 
@@ -743,7 +747,7 @@ t_group('canonical host and https', function () {
  * thing the driver sees when the real server is down.
  */
 
-t_group('database failure', function () {
+t_group('database failure', array('server'), function () {
 	// Distinctive enough that finding it anywhere means it came from here, and
 	// short on purpose: PHP truncates a string argument in a stack trace at 15
 	// characters, so a long password would go missing from a trace that did in
@@ -963,7 +967,7 @@ t_group('database failure', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('entry point inclusion', function () {
+t_group('entry point inclusion', array('fixture'), function () {
 	$entryPoints = mcm_entry_points(MCM_REPO_ROOT);
 
 	t_ok(count($entryPoints) >= 19, 'the entry points were found', count($entryPoints) . ' found');
@@ -1019,7 +1023,7 @@ t_group('entry point inclusion', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('secure tokens', function () {
+t_group('secure tokens', array('fixture'), function () {
 	// COOKIE_SECRET_KEY is spelled out rather than left to the fixture default,
 	// because this group builds a remember-me cookie by hand and has to hash it
 	// with the same key the fixture runs on.
@@ -1147,7 +1151,7 @@ t_group('secure tokens', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('password compatibility', function () {
+t_group('password compatibility', array('fixture'), function () {
 	// Hashes the site itself wrote, kept here as literals: an account whose
 	// owner has not signed in since has exactly this in its row. Nothing about
 	// them may stop working.
@@ -1232,7 +1236,7 @@ t_group('password compatibility', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('session identifier renewal', function () {
+t_group('session identifier renewal', array('server'), function () {
 	$fixture  = mcm_fixture('regenerate');
 	$existing = 'aaaabbbbccccddddeeeeffff00001111';
 	$for_late = '11110000ffffeeeeddddccccbbbbaaaa';
@@ -1367,7 +1371,7 @@ PHP;
  * ---------------------------------------------------------------------------
  */
 
-t_group('guard helpers', function () {
+t_group('guard helpers', array('fixture'), function () {
 	$fixture = mcm_fixture('guard-units');
 	$result  = mcm_cli($fixture, 'guard_units.php');
 	$report  = mcm_report($result['stdout']);
@@ -1461,7 +1465,7 @@ t_group('guard helpers', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('guard identity', function () {
+t_group('guard identity', array('server'), function () {
 	$fixture = mcm_fixture('guard-identity');
 
 	// One session per shape a real one can have, including the shapes an older
@@ -1512,7 +1516,7 @@ t_group('guard identity', function () {
 	mcm_server_stop($server);
 });
 
-t_group('guard csrf tokens', function () {
+t_group('guard csrf tokens', array('server'), function () {
 	$fixture = mcm_fixture('guard-csrf');
 	$mine    = 'b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1';
 	$theirs  = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
@@ -1606,7 +1610,7 @@ t_group('guard csrf tokens', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('guard rejections', function () {
+t_group('guard rejections', array('server'), function () {
 	$fixture    = mcm_fixture('guard-rejections');
 	$seed       = $fixture['seed'];
 	$signed_in  = 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1';
@@ -1770,7 +1774,7 @@ t_group('guard rejections', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('guards are additive', function () {
+t_group('guards are additive', array('server'), function () {
 	$guards = MCM_REPO_ROOT . '/inc/guards.php';
 
 	t_ok(file_exists($guards), 'the guards live in inc/guards.php');
@@ -1919,7 +1923,7 @@ t_group('guards are additive', function () {
  * else in the file.
  */
 
-t_group('the csrf token reaches the browser and stays inside this site', function () {
+t_group('the csrf token reaches the browser and stays inside this site', array('source'), function () {
 	$guards = MCM_REPO_ROOT . '/inc/guards.php';
 	$view   = MCM_REPO_ROOT . '/inc/views/logged_in.php';
 	$script = MCM_REPO_ROOT . '/js/mc.js';
@@ -2065,7 +2069,7 @@ t_group('the csrf token reaches the browser and stays inside this site', functio
  * in the optional real-database group below.
  */
 
-t_group('list endpoint guards', function () {
+t_group('list endpoint guards', array('server'), function () {
 	// The endpoints that write a list, and a request each that would work if
 	// the caller were allowed to make it.
 	$mutations = array(
@@ -2326,7 +2330,7 @@ t_group('list endpoint guards', function () {
  * DB_NAME, DB_USER and DB_PASS like any other configuration.
  */
 
-t_group('real database', function () {
+t_group('real database', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		$reason = mcm_db_skip_reason();
@@ -2335,7 +2339,7 @@ t_group('real database', function () {
 		return;
 	}
 
-	echo '  note  ' . $server['version'] . ', private instance on port ' . $server['port'] . "\n";
+	t_note('  note  ' . $server['version'] . ', private instance on port ' . $server['port']);
 
 	// A server that is up but could not be given the tracked schema is a
 	// failure, not a skip: nothing about it depends on the developer's machine.
@@ -2600,7 +2604,7 @@ t_group('real database', function () {
  * a refusal that has already written is still a refusal from the outside.
  */
 
-t_group('real database: list ownership', function () {
+t_group('real database: list ownership', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		// The group above has already printed the reason at length.
@@ -2900,7 +2904,7 @@ t_group('real database: list ownership', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('output escaping', function () {
+t_group('output escaping', array('server'), function () {
 	// One string that is hostile in all four destinations at once: it closes a
 	// script element, opens its own, ends an attribute, and carries a scheme
 	// separator and a slash for the URL case.
@@ -3072,7 +3076,7 @@ t_group('output escaping', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('list name validation', function () {
+t_group('list name validation', array('server'), function () {
 	$fixture = mcm_fixture('list-names');
 	$report  = mcm_report(mcm_cli($fixture, 'list_name.php')['stdout']);
 
@@ -3153,7 +3157,7 @@ t_group('list name validation', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('a stored value fits the column that holds it', function () {
+t_group('a stored value fits the column that holds it', array('fixture'), function () {
 	// mcm_column_text() is the one thing that happens to a value this server
 	// looked up before it is written to a varchar(255). A cut by the byte would
 	// pass every other case in this suite - the stored row would still be
@@ -3182,7 +3186,7 @@ t_group('a stored value fits the column that holds it', function () {
 	t_same('0', $at('not_a_string_bytes'), 'a value that is not text at all becomes an empty one');
 });
 
-t_group('security headers', function () {
+t_group('security headers', array('server'), function () {
 	/* The default fixture, over the wire ---------------------------------------- */
 
 	$fixture = mcm_fixture('headers');
@@ -3366,7 +3370,7 @@ t_group('security headers', function () {
  * ---------------------------------------------------------------------------
  */
 
-t_group('cookie hardening', function () {
+t_group('cookie hardening', array('server'), function () {
 	$fixture = mcm_fixture('remember-cookie');
 	$server  = mcm_server_start($fixture);
 
@@ -3456,7 +3460,7 @@ t_group('cookie hardening', function () {
  * is a fact about the source that a passing request cannot demonstrate.
  */
 
-t_group('movie endpoints refuse before the database', function () {
+t_group('movie endpoints refuse before the database', array('server'), function () {
 	// Port 1 is privileged: nothing here can be listening on it, so any request
 	// that reaches the connection fails there and says so.
 	$fixture = mcm_fixture('movie-guards', array('config' => array('DB_HOST' => '127.0.0.1;port=1')));
@@ -3564,7 +3568,7 @@ t_group('movie endpoints refuse before the database', function () {
 	mcm_server_stop($server);
 });
 
-t_group('import_list.php source checks of last resort', function () {
+t_group('import_list.php source checks of last resort', array('source'), function () {
 	// Guard order and scope for every endpoint, including import_list.php's own
 	// ownership guard, are proven behaviourally by 'movie ownership over a real
 	// database', and what an authorized import actually writes is proven by
@@ -3621,7 +3625,7 @@ t_group('import_list.php source checks of last resort', function () {
  * import then writes is not.
  */
 
-t_group('movie ownership over a real database', function () {
+t_group('movie ownership over a real database', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		t_skip('the movie ownership cases', mcm_db_skip_reason());
@@ -3965,7 +3969,7 @@ t_group('movie ownership over a real database', function () {
  * outbound request" is checked at all.
  */
 
-t_group('add_movie resolves its own metadata over a real database', function () {
+t_group('add_movie resolves its own metadata over a real database', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		t_skip('the add_movie metadata cases', mcm_db_skip_reason());
@@ -4186,7 +4190,7 @@ t_group('add_movie resolves its own metadata over a real database', function () 
  * ---------------------------------------------------------------------------
  */
 
-t_group('browser rendering', function () {
+t_group('browser rendering', array('fixture'), function () {
 	// The scripts this project writes. The vendored libraries are excluded on
 	// purpose, and naming the set here is what makes a new script a decision
 	// rather than an omission.
@@ -4388,7 +4392,7 @@ function mcm_tmdb_test_token()
 	return 'test-tmdb-read-token';
 }
 
-t_group('tmdb client transport', function () {
+t_group('tmdb client transport', array('server'), function () {
 	$fixture = mcm_fixture('tmdb');
 	$server  = mcm_server_start($fixture);
 	$token   = mcm_tmdb_test_token();
@@ -4492,7 +4496,7 @@ t_group('tmdb client transport', function () {
 	mcm_server_stop($server);
 });
 
-t_group('tmdb client endpoint policy', function () {
+t_group('tmdb client endpoint policy', array('server'), function () {
 	$fixture = mcm_fixture('tmdb-policy');
 	$server  = mcm_server_start($fixture);
 
@@ -4565,7 +4569,7 @@ t_group('tmdb client endpoint policy', function () {
 	mcm_server_stop($server);
 });
 
-t_group('tmdb client transport options', function () {
+t_group('tmdb client transport options', array('fixture'), function () {
 	// Nothing here makes a request. The options a request would be made with
 	// are read out of the array itself, so "does not follow a redirect" and
 	// "verifies the peer" are asserted rather than inferred - which matters,
@@ -4599,7 +4603,7 @@ t_group('tmdb client transport options', function () {
 	t_same('true', $report['loopback_verifypeer'], 'the loopback handle still verifies a peer it is given one for');
 });
 
-t_group('tmdb client configuration failures', function () {
+t_group('tmdb client configuration failures', array('fixture'), function () {
 	// Each of these is a request that is never made. The endpoints named here
 	// are unreachable or refused outright, so no case in this group sends
 	// anything anywhere.
@@ -4647,7 +4651,7 @@ t_group('tmdb client configuration failures', function () {
 	}
 });
 
-t_group('tmdb credentials never reach the session store', function () {
+t_group('tmdb credentials never reach the session store', array('server'), function () {
 	// The regression this exists for: the site used to keep a credential-bearing
 	// TMDb object in $_SESSION, so the key was written to the session store on
 	// disk for every visitor. Caching the answer is fine and still happens; it
@@ -4680,7 +4684,7 @@ t_group('tmdb credentials never reach the session store', function () {
 	mcm_server_stop($server);
 });
 
-t_group('tmdb credential hygiene in the source', function () {
+t_group('tmdb credential hygiene in the source', array('source'), function () {
 	$sources = mcm_php_sources(MCM_REPO_ROOT);
 	t_ok(count($sources) > 0, 'there are project sources to read');
 
@@ -4747,7 +4751,7 @@ t_group('tmdb credential hygiene in the source', function () {
  * disregarded all of this still could not get a title of its own stored.
  */
 
-t_group('the movie search leaves no credential in the browser', function () {
+t_group('the movie search leaves no credential in the browser', array('source'), function () {
 	$script = MCM_REPO_ROOT . '/js/mc.js';
 	$source = file_get_contents($script);
 
@@ -4972,7 +4976,7 @@ function mcm_tmdb_proxy_log_lines($log)
 	return implode("\n", $found);
 }
 
-t_group('tmdb proxy allowlist and validation', function () {
+t_group('tmdb proxy allowlist and validation', array('server'), function () {
 	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-allowlist');
 	$fixture = $bundle['fixture'];
 	// Signed in, because two of the five operations refuse an anonymous caller
@@ -5079,7 +5083,7 @@ t_group('tmdb proxy allowlist and validation', function () {
 	mcm_tmdb_proxy_stop($bundle);
 });
 
-t_group('tmdb proxy caller policy', function () {
+t_group('tmdb proxy caller policy', array('server'), function () {
 	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-callers');
 	$fixture = $bundle['fixture'];
 	$caller  = mcm_tmdb_proxy_sign_in($fixture);
@@ -5200,7 +5204,7 @@ t_group('tmdb proxy caller policy', function () {
 	mcm_tmdb_proxy_stop($bundle);
 });
 
-t_group('tmdb proxy operations and projection', function () {
+t_group('tmdb proxy operations and projection', array('server'), function () {
 	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-operations');
 	$fixture = $bundle['fixture'];
 	$token   = mcm_tmdb_test_token();
@@ -5322,7 +5326,7 @@ t_group('tmdb proxy operations and projection', function () {
 	mcm_tmdb_proxy_stop($bundle);
 });
 
-t_group('tmdb proxy projections', function () {
+t_group('tmdb proxy projections', array('fixture'), function () {
 	// No server and no database: the projectors are pure, so this is where a
 	// payload TMDb would never send can be handed to them directly. It is also
 	// where the list operation's projection is covered, because that operation
@@ -5460,7 +5464,7 @@ t_group('tmdb proxy projections', function () {
 	t_contains(rawurlencode('abc"><script>alert(1)</script>'), $hostile_html, 'the key is URL-encoded into the iframe src instead');
 });
 
-t_group('tmdb proxy configuration cache', function () {
+t_group('tmdb proxy configuration cache', array('server'), function () {
 	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-cache');
 	$fixture = $bundle['fixture'];
 	$token   = mcm_tmdb_test_token();
@@ -5549,7 +5553,7 @@ t_group('tmdb proxy configuration cache', function () {
 	mcm_tmdb_proxy_stop($bundle);
 });
 
-t_group('tmdb proxy upstream failures', function () {
+t_group('tmdb proxy upstream failures', array('server'), function () {
 	$bundle  = mcm_tmdb_proxy_fixture('tmdb-proxy-failures');
 	$fixture = $bundle['fixture'];
 	$token   = mcm_tmdb_test_token();
@@ -5616,7 +5620,7 @@ t_group('tmdb proxy upstream failures', function () {
 	mcm_tmdb_proxy_stop($bundle);
 });
 
-t_group('tmdb proxy list ownership over a real database', function () {
+t_group('tmdb proxy list ownership over a real database', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		t_skip('the TMDb proxy list ownership cases', mcm_db_skip_reason());
@@ -5795,7 +5799,7 @@ t_group('tmdb proxy list ownership over a real database', function () {
  * driven without one in the group just below.
  */
 
-t_group('import refusals cost no outbound request', function () {
+t_group('import refusals cost no outbound request', array('server'), function () {
 	// No database in this fixture, and none needed: everything here is refused
 	// before a connection would be opened, or - in the last case - by the
 	// connection itself. What the stub's log has to show, either way, is
@@ -5919,7 +5923,7 @@ t_group('import refusals cost no outbound request', function () {
 	mcm_tmdb_proxy_stop($bundle);
 });
 
-t_group('import over a real database and a stubbed TMDb', function () {
+t_group('import over a real database and a stubbed TMDb', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		t_skip('the list import cases', mcm_db_skip_reason());
@@ -6218,7 +6222,7 @@ t_group('import over a real database and a stubbed TMDb', function () {
  * received nothing.
  */
 
-t_group('the proxy asks its policy on one half and not the other', function () {
+t_group('the proxy asks its policy on one half and not the other', array('server'), function () {
 	$fixture = mcm_fixture('tmdb-execute');
 	$stub    = mcm_server_start($fixture);
 	mcm_tmdb_configure($fixture, array(
@@ -6288,7 +6292,7 @@ t_group('the proxy asks its policy on one half and not the other', function () {
 	mcm_server_stop($stub);
 });
 
-t_group('neither half of the proxy can become the other', function () {
+t_group('neither half of the proxy can become the other', array('source'), function () {
 	$proxy = MCM_REPO_ROOT . '/inc/tmdb_proxy.php';
 
 	// The policy half asks the policy. This restates what 'tmdb proxy caller
@@ -6363,7 +6367,7 @@ t_group('neither half of the proxy can become the other', function () {
 	t_same(0, mcm_count_calls_in($serve, 'mcm_tmdb_execute'), 'and never reaches past it either');
 });
 
-t_group('tmdb proxy source checks of last resort', function () {
+t_group('tmdb proxy source checks of last resort', array('source'), function () {
 	$proxy = MCM_REPO_ROOT . '/inc/tmdb_proxy.php';
 	$entry = MCM_REPO_ROOT . '/tmdb.php';
 
@@ -6433,7 +6437,7 @@ t_group('tmdb proxy source checks of last resort', function () {
  * which is what the issue is about, is what the checks below do instead.
  */
 
-t_group('the vendored TMDb wrapper and auth-session path are gone', function () {
+t_group('the vendored TMDb wrapper and auth-session path are gone', array('source'), function () {
 	t_ok(!is_file(MCM_REPO_ROOT . '/inc/classes/TMDb.inc'), 'the vendored wrapper file is deleted');
 
 	$sources = mcm_php_sources(MCM_REPO_ROOT);
@@ -6465,7 +6469,7 @@ t_group('the vendored TMDb wrapper and auth-session path are gone', function () 
  * containing no reference to the class that used to.
  */
 
-t_group('dialog.php renders a movie through a TMDb fixture stub with the wrapper deleted', function () {
+t_group('dialog.php renders a movie through a TMDb fixture stub with the wrapper deleted', array('server'), function () {
 	$fixture = mcm_fixture('dialog-tmdb');
 	$app     = mcm_server_start($fixture);
 	$stub    = mcm_server_start($fixture);
@@ -6497,7 +6501,7 @@ t_group('dialog.php renders a movie through a TMDb fixture stub with the wrapper
 	mcm_server_stop($stub);
 });
 
-t_group('the signed-in view renders through a TMDb fixture stub with the wrapper deleted', function () {
+t_group('the signed-in view renders through a TMDb fixture stub with the wrapper deleted', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		t_skip('the signed-in view rendering case', mcm_db_skip_reason());

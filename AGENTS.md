@@ -12,16 +12,51 @@ and the site itself pulls in no Composer package.
 
 ## Tests
 
-- `php tests/run.php` runs everything; `--filter=<text>` runs one group. The
-  suite covers `inc/bootstrap.php` and needs only a PHP CLI - no package
-  manager, no framework, no database. Keep it that way.
+- One suite, two runners, and a case belongs to neither. The cases are in
+  `tests/cases.php`, written against the harness in `tests/harness.php`, and a
+  group registers itself with `t_group()` and asserts through `t_ok()` and its
+  wrappers. A runner installs a recorder with `mcm_set_recorder()` and decides
+  what an assertion, a skip and a note do; nothing in a case knows which runner
+  is running. Never write an assertion into a runner, and never duplicate one
+  between them.
+  - `php tests/run.php` needs only a PHP CLI - no package manager, no
+    framework, no database. Keep it that way: it is the only runner that
+    reaches PHP 8.1, because PHPUnit 12 requires 8.3.
+  - `vendor/bin/phpunit` needs `composer install` first, and adds discovery,
+    group selection and a JUnit report at `build/logs/junit.xml`. Its bridge is
+    `tests/phpunit/`: one test method per requirement tag, because a PHPUnit
+    group is a property of a method and not of a data set, and each data set is
+    named after the group so `--filter` means the same under both.
+  - Both must stay green, and their assertion counts must agree. On the current
+    baseline that is 2577 without a database server and 3091 with one.
+- Groups are selectable by name and by tag under both. A group declares what it
+  needs - `source`, `fixture`, `server` or `database`, see
+  `mcm_requirement_tags()` - and `mcm_group_tags()` derives the tier from that:
+  `quick` for a group that listens on no socket, `integration` for the rest.
+  The tier is derived in one place on purpose, so the line between the fast
+  tier and the longer one can move without touching 52 registrations.
 - Each case builds a throw-away copy of the site under the system temp
   directory and drives it as a child process or through PHP's built-in server,
   so runs never touch the checkout or a real configuration.
+- Nothing a run starts may outlive it. `mcm_cleanup()` in `tests/harness.php`
+  stops every built-in server, stops the optional database server and removes
+  the work directory, and is installed as a shutdown function and a signal
+  handler by both runners - so a run ended by an exception, a fatal or a signal
+  leaves no process and no directory behind. There is exactly one signal
+  handler per signal, which is why `tests/database.php` no longer installs its
+  own: the last registration would otherwise be the only one that ran.
 - Two traps the harness already works around, documented at their call sites in
-  `tests/run.php`: the built-in server command must be prefixed with `exec` or
-  terminating it orphans the server and hangs the suite, and `fonts/` has to be
-  copied into a fixture or the captcha logs a font warning.
+  `tests/harness.php`: the built-in server command must be prefixed with `exec`
+  or terminating it orphans the server and hangs the suite, and `fonts/` has to
+  be copied into a fixture or the captcha logs a font warning.
+- A case must not `echo`. The dependency-free runner owns the screen it prints
+  to and PHPUnit owns its own; anything that is not an assertion goes through
+  `t_note()`, which is how the optional group's loud skip reaches both.
+- Anything generated is invisible to the source checks: `mcm_source_walk_skips()`
+  in `tests/entrypoints.php` keeps `vendor/`, `build/` and the suite itself out
+  of `mcm_php_sources()`, so a debug call in somebody else's library cannot fail
+  a check about this site, and a checkout with no `vendor/` gives the same
+  answer.
 - Failures that only a whole-source view can catch are static checks over
   `token_get_all()` in `tests/entrypoints.php`; comments are stripped first, so
   prose mentioning a call is not mistaken for one, and per-statement facts are
@@ -35,10 +70,12 @@ and the site itself pulls in no Composer package.
   duplicate declaration, as in `tests/pages/fault_compile.php` - reaches
   `mcm_shutdown_handler()`. A "fatal" case built on a parse error leaves the
   shutdown handler untested.
-- PHP 8.3 is the modernization target runtime, and the suite is verified there.
-  It is also run on 8.1, the older runtime still in play, and on 8.4 as
-  forward-compatibility evidence. The suite is developer-only, so its PHP floor
-  is independent of the site's.
+- PHP 8.3 is the modernization target runtime, and both runners are verified
+  there. `php tests/run.php` also covers 8.1, the older runtime still in play -
+  the reason it is not retired - and 8.4; `vendor/bin/phpunit` gates 8.3 and
+  8.4 and cannot reach 8.1 at all, because PHPUnit 12 requires 8.3. PHP 8.5 is
+  forward evidence only and never a target, for the captcha reason below. The
+  suite is developer-only, so its PHP floor is independent of the site's.
 - Known, unfixed, and surfaced by the suite: on PHP 8.5 `imagefttext()` no
   longer accepts a relative font path, so the captcha's
   `'../fonts/times_new_yorker.ttf'` in `inc/showCaptcha.php` stops rendering
@@ -55,6 +92,13 @@ and the site itself pulls in no Composer package.
   common way to get a toothless one: the session's own cache limiter already
   sends `Cache-Control: no-store, no-cache, must-revalidate`, so a substring
   check for a caching header passes whether or not the code under test set one.
+  A change that touches both runners has to sweep both, and with the database
+  server available - a group that skipped asserted nothing, so it proves
+  nothing. The sweep has two halves: inject a real regression into the
+  application and watch the group that owns it fail, and flip one existing
+  assertion per group and watch every group fail. The second half is what
+  catches a group that stopped being reached at all under one runner, which a
+  green run looks exactly like.
 - Cases that need a POST use `mcm_http_post()`; `mcm_http()` takes the method
   and the body as its fourth and fifth arguments. The ownership cases build
   their fixture table in SQLite in memory, and skip where the runtime has no
@@ -62,7 +106,7 @@ and the site itself pulls in no Composer package.
 - A signed-in browser is `mcm_seed_signed_in()` plus `mcm_session_headers()`:
   the session gets a CSRF token derived from its own identifier, and the request
   carries that session's cookie and token together. The session key is a literal
-  in `tests/run.php` because the suite must not load the application to describe
+  in `tests/harness.php` because the suite must not load the application to describe
   it; 'guard csrf tokens' is where that literal is checked against what a page
   actually sees, so a wrong key would fail there rather than quietly leave every
   other case driving a session with no token.
@@ -75,10 +119,15 @@ and the site itself pulls in no Composer package.
   the wrong tab.
 - One group is optional and is the only part that wants more than a PHP CLI:
   `tests/database.php` runs a private, throw-away database server when
-  `MCM_TEST_MYSQLD` or `PATH` offers a `mariadbd`/`mysqld`, and otherwise prints
-  a loud notice naming the coverage that was skipped. Both paths have to keep
-  passing. It needs no production change: `DB_HOST` reaches the DSN verbatim, so
-  `127.0.0.1;port=<port>` is the whole seam. See `README.md` for how to enable it.
+  `MCM_TEST_MYSQLD` or `PATH` offers a `mariadbd`/`mysqld`, and otherwise says
+  so at length, naming the coverage that was skipped. Both paths have to keep
+  passing under both runners. The notice is a value - `mcm_db_skip_notice()` -
+  rather than something printed, so the dependency-free runner puts it on its
+  screen and the PHPUnit case says it and then hands the same text to
+  `markTestSkipped()`, which is what keeps the machine-readable report from
+  reducing it to a bare "skipped". It needs no production change: `DB_HOST`
+  reaches the DSN verbatim, so `127.0.0.1;port=<port>` is the whole seam. See
+  `README.md` for how to enable it.
 - That group exists for the three regressions the rest of the suite is blind to,
   listed in `mcm_db_uncovered()`: a call present in a method but never reached, a
   value written to a column too narrow for it, and a `WHERE` clause that stops
@@ -100,11 +149,14 @@ and the site itself pulls in no Composer package.
   the suite does not do; its refusals happen earlier and are covered.
 - Server lifecycle is the sharp edge, because its failure mode is a hang rather
   than a failure. `proc_close()` waits for the child, so calling it on a server
-  that ignored SIGTERM never returns; `mcm_db_stop_server()` therefore signals,
-  waits a bounded time, escalates to SIGKILL and only then reaps, is idempotent,
-  and runs from a shutdown function and a signal handler as well as inline. The
-  `exec` prefix matters here for the same reason it does for the built-in server,
-  with worse consequences: an orphan holds both the port and the data directory.
+  that ignored SIGTERM never returns; `mcm_end_process()` in `tests/harness.php`
+  therefore signals, waits a bounded time, escalates to SIGKILL and only then
+  reaps. It is what ends a built-in server and what `mcm_db_stop_server()` calls
+  with a longer grace period, so there is one answer to "how does a child of
+  this suite die" rather than two. Both are idempotent and both are reached from
+  `mcm_cleanup()`. The `exec` prefix matters here for the same reason it does
+  for the built-in server, with worse consequences: an orphan holds both the
+  port and the data directory.
 - The tracked schema is MyISAM throughout, so nothing is transactional and cases
   re-seed instead of rolling back, and `users.user_registration_datetime`
   defaults to a zero date that a `NO_ZERO_DATE` server refuses - the dump's own
@@ -126,6 +178,15 @@ and the site itself pulls in no Composer package.
   actually exercised on, `>=8.1.0 <8.5.0`. A newer PHP is forward-compatibility
   evidence, never the target, and 8.5 is deliberately outside the constraint
   because of the captcha font regression noted above.
+- `phpunit/phpunit` is the one thing Composer manages, at an exact version
+  rather than a range, so the tool that gates a change is the same tool
+  everywhere. PHPUnit 12 is the newest major that supports 8.3; 13 requires
+  8.4.1 and would drop the target, which is what settles the choice.
+- `config.platform.php` is pinned to the target so resolution answers the same
+  question on any machine, and `composer install` therefore works on 8.1 even
+  though PHPUnit will not run there. That is the intended split: the manifest
+  installs everywhere and the PHPUnit gate is 8.3 and 8.4, while
+  `php tests/run.php` is what covers 8.1.
 
 ## Request lifecycle
 
@@ -162,7 +223,7 @@ and the site itself pulls in no Composer package.
 - Every cookie other than the session cookie goes through `mcm_set_cookie()`,
   which decides HttpOnly, SameSite and Secure itself from the same two settings
   the session cookie uses. A cookie's attributes must be asserted off that
-  cookie's own `Set-Cookie` line (`mcm_cookie_header()` in `tests/run.php`): the
+  cookie's own `Set-Cookie` line (`mcm_cookie_header()` in `tests/harness.php`): the
   session cookie in the same response carries those attributes too, so a pattern
   run across every header joined together passes either way.
 - Configuration is layered: `inc/config/config.php` (untracked, real values)
