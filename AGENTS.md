@@ -27,8 +27,10 @@ and the site itself pulls in no Composer package.
     `tests/phpunit/`: one test method per requirement tag, because a PHPUnit
     group is a property of a method and not of a data set, and each data set is
     named after the group so `--filter` means the same under both.
-  - Both must stay green, and their assertion counts must agree. On the current
-    baseline that is 2577 without a database server and 3091 with one.
+  - Both must stay green, and their assertion counts must agree. The exact
+    totals move whenever groups are added and must be read from an actual run
+    of both runners rather than quoted from memory, for the two configurations
+    being compared - without a database server, and with one.
 - Groups are selectable by name and by tag under both. A group declares what it
   needs - `source`, `fixture`, `server` or `database`, see
   `mcm_requirement_tags()` - and `mcm_group_tags()` derives the tier from that:
