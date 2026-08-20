@@ -40,7 +40,17 @@ The endpoints that change a list or a movie now accept only a POST that carries 
 Run `php tests/run.php`.  The suite covers `/inc/bootstrap.php` and needs nothing but a PHP CLI: no package manager, no test framework, no database, and no web server beyond the one built into PHP.  Every case works on a throw-away copy of the site under the system temp directory, so running the suite never touches your checkout or your configuration.  Add `--filter=<text>` to run a single group.
 
 #### The browser page
-The suite is a PHP one and drives no browser.  What a browser builds out of a hostile list name or movie title is answered by `/tests/browser/xss.html`, which you open by hand — in a browser directly, or over any local web server.  It renders a hostile list name, movie title, poster path and movie identifier through the real `/js/dom.js` and `/js/mc.js`, then reports what the document ended up holding; the summary at the top is green when every check passed.  Nothing is installed and no server is needed.
+The suite is a PHP one and drives no browser.  What a browser builds out of a hostile list name or movie title is answered by `/tests/browser/xss.html`, which renders a hostile list name, movie title, poster path and movie identifier through the real `/js/dom.js` and `/js/mc.js`, then reports what the document ended up holding; the summary at the top is green when every check passed.  It still opens by hand — in a browser directly, or over any local web server — with nothing installed and no server needed.
+
+It can also be driven automatically, in a real browser rather than a DOM emulation, because two of the checks depend on layout: the tab strip is only correctly addressed by position once the browser has actually laid it out.  From `tests/browser`, run:
+
+```
+npm install
+npx playwright install chromium
+node run.js
+```
+
+`npm install` and `npx playwright install chromium` are one-time setup: they fetch a pinned version of Playwright and a matching, pinned Chromium build, reproducibly from the committed `package-lock.json`.  `node run.js` then opens the page, reads its own results table, prints every failing check and why, and exits non-zero if any check failed.  On a machine with no Chromium available, it prints a loud `SKIP:` line naming the coverage that was missed and exits zero, the same contract the optional database group below keeps for a missing database server.  This automates only the checks the page already makes; it covers no more of the site than opening the page by hand always did.
 
 #### The optional database group
 Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so `tests/run.php` runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run.

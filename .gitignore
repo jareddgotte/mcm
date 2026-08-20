@@ -10,6 +10,7 @@ inc/config/config.php
 # Generated / third-party artifacts
 /vendor/
 /var/
+/tests/browser/node_modules/
 
 # Logs
 *.log
