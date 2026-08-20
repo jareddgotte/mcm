@@ -6667,7 +6667,7 @@ function mcm_mail_cases(array $runtime)
 			// line of it, so nothing answers and the client waits out its own
 			// ten-second timeout before the failure page appears.
 			t_ok(in_array('body quit', mcm_mail_transcript($stub), true), "the library's parting command arrived as message content" . $where, implode(' | ', mcm_mail_transcript($stub)));
-			t_ok($elapsed >= 5.0, 'the visitor waits out an SMTP timeout before being told anything' . $where, sprintf('the send took %.2fs', $elapsed));
+			t_ok($elapsed >= 5.0, 'the request cannot end until that timeout does' . $where, sprintf('the send took %.2fs', $elapsed));
 		}
 
 		// However the runtime handled it, the credential went to the stand-in
@@ -6682,7 +6682,6 @@ function mcm_mail_cases(array $runtime)
 	mcm_mail_stub_stop($stub);
 
 	$expected = mcm_at($report, 'attempt', '') . '/' . $result['status'];
-	$has_each = (mcm_at($report, 'each_exists', '') === 'yes');
 
 	/* 2. The same send again, and the other caller ------------------------- */
 
