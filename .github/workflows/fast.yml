@@ -1,0 +1,94 @@
+# The fast tier, on every change that is under review.
+#
+# This workflow is a wrapper and nothing else: what it runs is
+# tools/quality/fast.sh, the same script a developer runs, so there is one
+# definition of "the fast tier" rather than one here and one on a laptop.
+# Everything it needs is a PHP CLI and the Composer tool tree; it starts no
+# server, launches no browser and connects to no database. The longer tier is
+# integration.yml.
+#
+# Which PHP, and what each one means. PHP 8.3 is this project's modernization
+# target and the run that speaks for it. 8.1 is the older runtime still in
+# play, and 8.4 is forward-compatibility evidence; neither is a target, and
+# both gate only because both are green today and a regression in either is
+# worth hearing about. 8.5 never gates: the captcha's relative font path stops
+# working there and the vendored mail library uses a cast PHP 8.5 deprecates,
+# both of them the site's own defects, documented in AGENTS.md and deliberately
+# not silenced. Its job records what happens and is allowed to fail.
+#
+# Tool versions: the actions are pinned by commit, PHPUnit by composer.lock at
+# one exact version, and the PHP minor by this file. The exact patch level of
+# PHP is whatever the runner's PHP distribution offers on the day and is
+# recorded in the run's own summary, so a result stays reproducible from what
+# it wrote down.
+
+name: fast checks
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: fast checks (PHP ${{ matrix.php }}, ${{ matrix.role }})
+    runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.gating == false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '8.3'
+            role: target
+            gating: true
+            require: phpunit
+          - php: '8.1'
+            role: older runtime still in play
+            gating: true
+            require: ''
+          - php: '8.4'
+            role: forward-compatibility evidence
+            gating: true
+            require: phpunit
+          - php: '8.5'
+            role: forward-compatibility evidence, never gates
+            gating: false
+            require: phpunit
+    steps:
+      - name: check out the change
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: install PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      # composer.lock is committed, so this resolves to the same PHPUnit every
+      # time. The platform is pinned to 8.3 in composer.json, which is what
+      # lets the tree install on 8.1 even though PHPUnit will not run there.
+      - name: install the pinned tool tree
+        run: composer install --no-interaction --no-progress
+
+      - name: run the fast tier
+        env:
+          MCM_QUALITY_REQUIRE: ${{ matrix.require }}
+        run: tools/quality/fast.sh
+
+      # The recorded result a reviewer is pointed at. Uploaded whatever
+      # happened, because a failing run is the one worth reading.
+      - name: keep the recorded result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fast-php${{ matrix.php }}
+          path: build/quality/fast
+          if-no-files-found: warn

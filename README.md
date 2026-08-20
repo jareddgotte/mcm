@@ -50,11 +50,13 @@ vendor/bin/phpunit                   PHPUnit 12
 
 Both work on a throw-away copy of the site under the system temp directory, so running either never touches your checkout or your configuration.
 
-**Which PHP each covers.**  PHP 8.3 is the modernization target and is where both runners are verified.  PHPUnit 12 is the newest major that supports 8.3, and it requires 8.3 or later, so it gates 8.3 and 8.4 and cannot say anything about 8.1 — which is why the dependency-free runner stays and is the one to reach for on an older runtime.  PHP 8.5 is forward evidence only and is not a target: the captcha's relative font path stops working there (see the note below), so a run on 8.5 fails that one assertion on purpose rather than being silenced.
+The checks that run automatically are grouped into two tiers — a fast one on every pull request and a longer one after a merge and on a schedule — and each tier is a single script you can run yourself.  See [The two check tiers](#the-two-check-tiers) below.
+
+**Which PHP each covers.**  PHP 8.3 is the modernization target and is where both runners are verified.  8.1 is the older runtime still in play and 8.4 is forward-compatibility evidence; neither is a target.  PHPUnit 12 is the newest major that supports 8.3, and it requires 8.3 or later, so it gates 8.3 and 8.4 and cannot say anything about 8.1 — which is why the dependency-free runner stays and is the one to reach for on an older runtime.  PHP 8.5 is forward evidence only and never a target: a dozen assertions fail there (see the note below), on purpose rather than being silenced.
 
 | | 8.1 | 8.3 (target) | 8.4 | 8.5 |
 |---|---|---|---|---|
-| `php tests/run.php` | covered | covered | covered | one known failure, not a target |
+| `php tests/run.php` | covered | covered | covered | twelve known failures, not a target |
 | `vendor/bin/phpunit` | not supported by the tool | gates | gates | not gating |
 
 **Selecting groups.**  Every group declares what it needs — `source`, `fixture`, `server` or `database` — and carries a tier tag derived from that: `quick` for the groups that listen on no socket, `integration` for the rest.  Either runner will select on a name or on a tag, and the two agree on what they select:
@@ -71,8 +73,10 @@ vendor/bin/phpunit --filter cookie
 
 Interrupting either runner leaves nothing behind: every built-in server and the optional database server are stopped, and the run's temporary directory is removed, on a normal end, an exception, a fatal and a signal alike.
 
-#### The known PHP 8.5 failure
-`imagefttext()` on PHP 8.5 no longer accepts a relative font path, and the captcha in `/inc/showCaptcha.php` names its font as `'../fonts/times_new_yorker.ttf'`.  So on 8.5 the captcha stops rendering and logs a font warning, and the suite fails exactly that one assertion.  That failure is the site's rather than the harness's, and it is left in place on purpose: the assertion stays as it is until the captcha is fixed, and 8.5 is recorded as forward evidence rather than treated as a target.  An absolute path is what will fix it.
+#### The known PHP 8.5 failures
+`imagefttext()` on PHP 8.5 no longer accepts a relative font path, and the captcha in `/inc/showCaptcha.php` names its font as `'../fonts/times_new_yorker.ttf'`.  So on 8.5 the captcha stops rendering and logs a font warning.  A second one joins it: `/inc/libs/PHPMailer.php` uses a `(boolean)` cast, which 8.5 deprecates, and the deprecation reaches the error log — which is enough to fail the checks that assert a page logged nothing at all.  Between them a full run on 8.5 fails twelve assertions with a database server available and seven without one — two of them the captcha's, the rest the deprecation's.
+
+Both failures are the site's rather than the harness's, and both are left in place on purpose: the assertions stay as they are until the captcha names its font absolutely and the vendored mail library is dealt with — the latter being [a decision of its own](#the-mail-check-and-what-it-found).  8.5 is recorded as forward evidence and gates nothing; see [The two check tiers](#the-two-check-tiers).
 
 #### Development tooling (optional)
 `composer.json` and `composer.lock` exist for development tooling only — nothing the site loads is a Composer package, `require` stays empty, and `php tests/run.php` needs nothing installed to run and gives the same result whether or not you've ever run Composer.  Run `composer install` from the committed `composer.lock` if you want the pinned tool tree — PHPUnit, at one exact version — and it lands in `/vendor`, which is git-ignored and safe to delete at any time.  `/build` is generated the same way, by PHPUnit, and is equally disposable.
@@ -133,6 +137,76 @@ A `mariadbd` or `mysqld` already on your `PATH`, or in the usual places a packag
 Two things about the tracked schema decide whether it loads, and both are the schema's rather than the harness's:
 - Every table is `ENGINE=MyISAM`, so nothing in the application is transactional.  A case cannot roll a change back and re-seeds instead.
 - `users.user_registration_datetime` defaults to `'0000-00-00 00:00:00'`, which a server whose `sql_mode` contains `NO_ZERO_DATE` refuses — MySQL 5.7 and later have it on by default, MariaDB does not.  The dump opens with its own `SET SQL_MODE` line, and running that line as part of the load is what makes the rest of it loadable.  The application's own connections are unaffected and run on the server's default `sql_mode`, which on a current server includes `STRICT_TRANS_TABLES`; under that mode a value too long for its column is an error rather than the silent truncation older servers performed.
+
+#### The two check tiers
+Everything above is a way of running the suite by hand.  The checks the repository runs *automatically* are grouped into two tiers, and every check belongs to exactly one of them.  Each tier is one script, and the automated path runs that same script rather than a copy of it — so what runs in a workflow is what runs on your machine.
+
+```
+tools/quality/fast.sh                       the fast tier, about twenty seconds
+tools/quality/integration.sh                the longer tier, a few minutes
+```
+
+Both write their result to `/build/quality/<tier>/` — a `summary.txt` naming every check and its verdict, and one log per check.  `/build` is generated and git-ignored.  `MCM_QUALITY_PHP` picks the PHP CLI to use; without it they use `php` from your `PATH`.
+
+**The fast tier — while a change is being read.**  It needs a PHP CLI, and for one of its five checks the Composer tool tree.  It starts no server, opens no socket, launches no browser and connects to no database, and that restraint is the whole reason it is separate: it must never become the reason a small change waits.
+
+| check | what it is | what a failure means |
+|---|---|---|
+| `parse` | `php -l` over every PHP file the repository tracks | that file is a white page for whoever loads it — deployment is manual and additive, so a file that does not parse ships |
+| `lint` | the reserved formatting / static-analysis lane | nothing; it reports `RESERVED`, never `PASS`, and checks nothing at all yet |
+| `hygiene` | the credential and example-configuration groups, run by name | a credential, a TMDb host or a real value has reached a browser-served file or the tracked example configuration |
+| `suite-quick` | every group tagged `quick`, dependency-free runner | an ordinary test failure; the log names the assertion |
+| `phpunit-quick` | the same groups under PHPUnit | the same, plus `/build/logs/junit.xml` for whatever reads reports |
+
+**The reserved lane is empty on purpose.**  `tools/quality/lint.sh` runs no tool, reads no configuration and has no opinion about a single character of the source.  Which formatter, which indentation width, which static analyser and which rule set fill it is a separate decision with its own review; the tracked `.editorconfig` is an input to that decision rather than the answer to it.  The lane reports `RESERVED` rather than `PASS` so that nobody reads the summary and believes this repository verifies its formatting.  It does not.
+
+**The longer tier — before a change is considered ready.**  It opens sockets, starts PHP's built-in server many times over, launches a real browser, runs a private database server and drives the mail path on every PHP CLI it is given.
+
+| check | what it is | what a failure means |
+|---|---|---|
+| `browser` | `/tests/browser/run.js` — the hostile-value page in a real Chromium | a value a visitor typed reached the document as markup, or the tab strip wrapped and `renameList()` would rename the wrong tab |
+| `suite-full` | every group, dependency-free runner | an ordinary test failure |
+| `phpunit-full` | every group, PHPUnit | the same |
+| `runners-agree` | the two runners made the same number of assertions, compared only when both finished green | a group stopped being reached under one of them — the one failure a green run looks exactly like |
+| `database` | whether the database-backed groups actually ran | nothing on its own; it is `SKIP` when they did not, naming the regressions that are therefore invisible |
+| `mail-runtimes` | whether the mail check saw more than one PHP runtime | the same shape: `SKIP` names what one data point cannot show |
+
+It reaches neither TMDb nor the live site.  Every outbound request in the suite goes to a stand-in inside the run's own throw-away fixture, the mail path ends at a stand-in bound to `127.0.0.1`, and the database server is a private instance the run creates and destroys.  It installs nothing into your system and it deploys nothing.
+
+**A missing prerequisite is loud, never quiet.**  Without a browser, without a database server, or with only one PHP runtime, the longer tier still passes — and its summary carries a `not covered by this run` section naming, in the suite's own words, exactly which regressions went unlooked-for.  Give it what it wants and nothing is skipped:
+
+```
+cd tests/browser && npm ci && npx playwright install chromium && cd ../..
+export MCM_TEST_MYSQLD="$(tools/quality/fetch-mariadb.sh)"
+export MCM_TEST_PHP=/usr/bin/php8.1:/usr/bin/php8.4
+tools/quality/integration.sh
+```
+
+`tools/quality/fetch-mariadb.sh` downloads one pinned MariaDB binary tarball, checks it against a checksum written down in the script, unpacks it outside the checkout and prints the path to the server binary.  It is the only thing in `tools/quality/` that downloads anything, it is run deliberately rather than as part of a check, and doing it by hand instead — as [the optional database group](#the-optional-database-group) describes — works exactly as well.
+
+`--require` turns those loud skips into failures:
+
+```
+tools/quality/integration.sh --require browser,database,mail-runtimes,phpunit
+```
+
+That is what the automated run passes, so that a run which lost its browser or its database server fails rather than reporting a green with a third of its coverage missing.  Leave it off when you are running by hand and do not have them; a loud skip is the right answer there.
+
+**How each tier runs automatically, and where the result is.**  Both tiers are GitHub Actions workflows, and both do nothing but call the script above.
+
+| tier | workflow | when it runs | where the result is |
+|---|---|---|---|
+| fast | `.github/workflows/fast.yml` | every pull request, every push to `master`, and on request | the run's checks on the pull request, plus a `fast-php<version>` artifact holding `/build/quality/fast` |
+| longer | `.github/workflows/integration.yml` | after a merge to `master`, weekly, and on request | an `integration-php<version>` artifact holding `/build/quality/integration` and `/build/logs/junit.xml` |
+
+The longer tier deliberately does not run on a pull request: it takes minutes, and the point of the split is that a small change never waits on it.  A reviewer who wants it on a branch before merging runs the workflow on that branch from the Actions tab and points at that run.
+
+**Which PHP the checks exercise, and what each version means.**  PHP 8.3 is the target and is the run that speaks for the project.  8.1 is the older runtime still in play and 8.4 is forward-compatibility evidence — neither is a target, and both gate only because both are green today.  **PHP 8.5 never gates.**  Twelve assertions fail there in a run with a database server, and seven in one without: the captcha's relative font path stops rendering, and the vendored mail library uses a cast that 8.5 deprecates, which the error log then carries into every check that asserts a page logged nothing — see [The known PHP 8.5 failures](#the-known-php-85-failures).  Both are the site's own defects.  They are recorded and are not silenced: the 8.5 jobs run, report what they find, and are marked as not blocking.  The fast tier happens to be green on 8.5 today, because both defects show up only in checks that need a socket.
+
+**Every tool is pinned.**  The workflow actions are pinned by commit; PHPUnit by the committed `composer.lock` at one exact version; Playwright and the Chromium build it downloads by `/tests/browser/package-lock.json`; the database server by version and SHA-256 in `tools/quality/fetch-mariadb.sh`; and the PHP minor version by the workflow.  The exact PHP patch level is whatever the runner offers on the day, and each run writes it into its own summary, so a result stays reproducible from what it recorded.
+
+**What the checks deliberately do not do.**  They never deploy — deployment is manual and nothing here changes that, adds a step towards it, or adds a credential that would make one possible.  They add no repository secret.  They do not require themselves before a merge; that is a repository setting and turning it on is separate from building the check.  They do not retire `php tests/run.php`, which stays supported and is what the fast tier runs first.  And they choose no formatting standard and no static-analysis tool — see the reserved lane above.
+
 
 ### Notes
 - The endpoints that create, rename, reorder, share and delete a movie list require a signed-in owner.  A request from nobody is refused with `401`, a request for somebody else's list with `403`, and a request that is not the shape the page sends with `400`; every refusal answers with a fixed generic body and puts the reason in the server-side log only.  A request naming several lists at once changes none of them unless the caller owns all of them.

@@ -12,6 +12,13 @@ insert_final_newline = true
 indent_style = tab
 indent_size = 4
 
+# Not a style choice and not an input to the pending formatting decision: the
+# YAML specification forbids a tab as indentation, so a workflow file has no
+# other option.
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
 [*.md]
 indent_style = space
 indent_size = 2
