@@ -447,8 +447,25 @@ function mcm_count_debug_output($file)
 	return $count;
 }
 
+/**
+ * Whether a directory entry is one the project's own source is not in.
+ *
+ * The suite itself is excluded because it is not the site, and the generated
+ * trees are excluded because they are not the project's code either: /vendor
+ * holds whatever Composer resolved for the development tooling, and its
+ * contents would otherwise be read as this project's own by every check below -
+ * a debug call in somebody else's library would fail a check about this site.
+ * See "Development tooling" in AGENTS.md: nothing under /vendor is served, and
+ * a checkout with no /vendor at all gives these checks the same answer.
+ */
+function mcm_source_walk_skips($entry)
+{
+	return in_array($entry, array('.', '..', '.git', 'tests', 'vendor', 'build', 'var', 'node_modules'), true);
+}
+
 /** Every PHP file in the project, excluding this test suite. */
 function mcm_php_sources($root)
+
 {
 	$found = array();
 	$queue = array($root);
@@ -456,7 +473,7 @@ function mcm_php_sources($root)
 	while (count($queue) > 0) {
 		$directory = array_shift($queue);
 		foreach (scandir($directory) as $entry) {
-			if ($entry === '.' || $entry === '..' || $entry === '.git' || $entry === 'tests') {
+			if (mcm_source_walk_skips($entry)) {
 				continue;
 			}
 			$path = $directory . '/' . $entry;
@@ -481,7 +498,7 @@ function mcm_htaccess_files($root)
 	while (count($queue) > 0) {
 		$directory = array_shift($queue);
 		foreach (scandir($directory) as $entry) {
-			if ($entry === '.' || $entry === '..' || $entry === '.git' || $entry === 'tests') {
+			if (mcm_source_walk_skips($entry)) {
 				continue;
 			}
 			$path = $directory . '/' . $entry;

@@ -320,10 +320,12 @@ function mcm_db_boot(array $binaries)
 		'schema_error' => '',
 	);
 	// Remembered before the first thing that can fail, so the stop path can
-	// find the process however the boot ends.
+	// find the process however the boot ends. The shutdown function and the
+	// signal handler that reach it live in tests/harness.php, in mcm_cleanup(),
+	// which every runner installs: a server has to be stopped however the run
+	// ends, and there must be exactly one handler per signal or the last one
+	// registered would be the only one that ran.
 	$GLOBALS['mcm_db_server'] = $server;
-	register_shutdown_function('mcm_db_stop_server');
-	mcm_db_catch_signals();
 
 	mcm_db_wait_for_port($server);
 
@@ -407,47 +409,14 @@ function mcm_db_error_tail(array $server)
 }
 
 /**
- * Stop the server when the run itself is interrupted, where that is possible.
- *
- * register_shutdown_function() covers a normal end, an uncaught exception and a
- * fatal error, but not a signal: PHP with no handler installed dies at once and
- * runs nothing. An interrupt at the terminal usually reaches the whole process
- * group and takes the server with it, but a signal aimed at this process alone
- * does not, and the server would be left holding a data directory that is about
- * to be deleted. pcntl is a command-line extension and may be absent, so this
- * is an improvement where it exists rather than something relied on.
- */
-function mcm_db_catch_signals()
-{
-	if (!function_exists('pcntl_signal') || !function_exists('pcntl_async_signals')) {
-		return;
-	}
-
-	pcntl_async_signals(true);
-	foreach (array(SIGINT, SIGTERM, SIGHUP) as $signal) {
-		pcntl_signal($signal, 'mcm_db_signal_handler');
-	}
-}
-
-/** Stop the server and end the run, reporting the signal in the exit status. */
-function mcm_db_signal_handler($signal)
-{
-	echo "\ninterrupted: stopping the database server\n";
-	mcm_db_stop_server();
-
-	// The conventional status for a process a signal ended.
-	exit(128 + (int) $signal);
-}
-
-/**
  * Stop the run's server, and be certain about it.
  *
- * Reliability matters more here than anywhere else in the suite. proc_close()
- * waits for the child, so calling it on a server that ignored the signal hangs
- * the run rather than failing it, and a hang says nothing about what is wrong.
- * So: ask politely, wait a bounded time, insist, wait again, and only then
- * reap. Safe to call repeatedly, and registered as a shutdown function so that
- * an exception anywhere in the group still ends the server.
+ * Reliability matters more here than anywhere else in the suite, so the ending
+ * itself is mcm_end_process() in tests/harness.php - ask politely, wait a
+ * bounded time, insist with a signal that cannot be declined, and only then
+ * reap - given the longer grace period a database server shutting down wants.
+ * Safe to call repeatedly, and reached from mcm_cleanup(), so an exception, a
+ * fatal or an interrupt anywhere in the group still ends the server.
  */
 function mcm_db_stop_server()
 {
@@ -467,44 +436,14 @@ function mcm_db_stop_server()
 	if (!isset($server['process']) || !is_resource($server['process'])) {
 		return;
 	}
-	$process = $server['process'];
-
-	proc_terminate($process);
-	if (!mcm_db_wait_for_exit($process, 20.0)) {
-		// SIGKILL: the process cannot decline it, so the wait after it is a
-		// formality rather than a hope.
-		proc_terminate($process, 9);
-		mcm_db_wait_for_exit($process, 5.0);
-	}
-
-	proc_close($process);
+	mcm_end_process($server['process'], 20.0);
 
 	// A data directory is a hundred megabytes or so, and a run that ends on an
-	// interrupt never reaches the work directory's own clean-up at the end of
-	// tests/run.php. Removing this much here costs nothing on a normal run.
+	// interrupt may never reach the work directory's own clean-up. Removing this
+	// much here costs nothing on a normal run.
 	if (isset($server['root']) && $server['root'] !== '') {
 		mcm_rmtree($server['root']);
 	}
-}
-
-/**
- * Wait up to $seconds for a process to exit.
- *
- * @return bool whether it exited
- */
-function mcm_db_wait_for_exit($process, $seconds)
-{
-	$deadline = microtime(true) + $seconds;
-
-	do {
-		$status = proc_get_status($process);
-		if (!is_array($status) || !$status['running']) {
-			return true;
-		}
-		usleep(50000);
-	} while (microtime(true) < $deadline);
-
-	return false;
 }
 
 /** Reserve a port the system is not using, the way mcm_server_start() does. */
@@ -909,21 +848,38 @@ function mcm_db_lists_snapshot($pdo)
  */
 function mcm_db_print_skip($reason)
 {
+	t_note(mcm_db_skip_notice($reason));
+}
+
+/**
+ * The notice itself, as one block of text.
+ *
+ * It is built rather than printed so that both runners can say it: the
+ * dependency-free runner prints it to the screen it already owns, and the
+ * PHPUnit case says it and then hands the same text to markTestSkipped(), so
+ * the machine-readable report carries the uncovered list too rather than a bare
+ * "skipped".
+ */
+function mcm_db_skip_notice($reason)
+{
 	$rule = '  ' . str_repeat('-', 72) . "\n";
 
-	echo "\n" . $rule;
-	echo "  SKIPPED: the optional real-database group did not run.\n";
-	echo '  Reason: ' . $reason . "\n\n";
-	echo "  Not covered by this run:\n";
+	$text  = "\n" . $rule;
+	$text .= "  SKIPPED: the optional real-database group did not run.\n";
+	$text .= '  Reason: ' . $reason . "\n\n";
+	$text .= "  Not covered by this run:\n";
 	foreach (mcm_db_uncovered() as $index => $line) {
-		echo '    ' . ($index + 1) . '. ' . wordwrap($line, 66, "\n       ") . "\n";
+		$text .= '    ' . ($index + 1) . '. ' . wordwrap($line, 66, "\n       ") . "\n";
 	}
-	echo "\n";
-	echo "  To cover them, unpack a MariaDB or MySQL binary tarball anywhere and\n";
-	echo "  point the suite at the server binary inside it:\n\n";
-	echo "      MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd php tests/run.php\n\n";
-	echo "  Nothing is installed and no service is started: the harness creates a\n";
-	echo "  private data directory, port and credentials under the system temp\n";
-	echo "  directory and destroys them when the run ends. See README.md.\n";
-	echo $rule . "\n";
+	$text .= "\n";
+	$text .= "  To cover them, unpack a MariaDB or MySQL binary tarball anywhere and\n";
+	$text .= "  point the suite at the server binary inside it:\n\n";
+	$text .= "      MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd php tests/run.php\n";
+	$text .= "      MCM_TEST_MYSQLD=/path/to/unpacked/bin/mariadbd vendor/bin/phpunit\n\n";
+	$text .= "  Nothing is installed and no service is started: the harness creates a\n";
+	$text .= "  private data directory, port and credentials under the system temp\n";
+	$text .= "  directory and destroys them when the run ends. See README.md.\n";
+	$text .= $rule;
+
+	return $text;
 }
