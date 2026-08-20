@@ -56,7 +56,9 @@ $GLOBALS['mcm_state'] = array(
  *
  *   source    reads the project's own files and starts no process at all
  *   fixture   builds a throw-away copy of the site and drives it as a child
- *   server    additionally runs PHP's built-in server and talks to it
+ *   server    additionally listens on a socket and talks to it - PHP's
+ *             built-in server, or a stand-in of this suite's own bound to
+ *             the loopback interface
  *   database  additionally needs the optional, private database server, and
  *             skips loudly without one
  *

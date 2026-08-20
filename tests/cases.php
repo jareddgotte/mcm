@@ -6587,7 +6587,7 @@ t_group('the signed-in view renders through a TMDb fixture stub with the wrapper
  * one writing to a file.
  */
 
-t_group('mail sending against a local stand-in', function () {
+t_group('mail sending against a local stand-in', array('fixture', 'server'), function () {
 	foreach (mcm_mail_runtimes() as $runtime) {
 		if ($runtime['problem'] !== '') {
 			t_skip('the mail path on ' . $runtime['label'], $runtime['problem']);
@@ -6813,7 +6813,7 @@ function mcm_mail_cases(array $runtime)
  * was written" are different claims.
  */
 
-t_group('registration after a failed send over a real database', function () {
+t_group('registration after a failed send over a real database', array('database'), function () {
 	$server = mcm_db_server();
 	if ($server === null) {
 		$reason = mcm_db_skip_reason();
