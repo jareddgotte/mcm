@@ -23,6 +23,10 @@
  * runs a private, throw-away database server when a developer has a server
  * binary to run, and prints a loud skip naming the uncovered regressions when
  * they do not. The suite passes either way.
+ *
+ * tests/mail.php is the same shape for the mail path: a stand-in for the far
+ * end of a send, and the other PHP runtimes MCM_TEST_PHP names, both optional
+ * and both loud about what is not covered without them.
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -32,6 +36,7 @@ if (PHP_SAPI !== 'cli') {
 require_once dirname(__FILE__) . '/harness.php';
 require_once MCM_TESTS_DIR . '/entrypoints.php';
 require_once MCM_TESTS_DIR . '/database.php';
+require_once MCM_TESTS_DIR . '/mail.php';
 require_once MCM_TESTS_DIR . '/cases.php';
 
 $mcm_filter = '';

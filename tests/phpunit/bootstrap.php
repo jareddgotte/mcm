@@ -21,4 +21,5 @@ require_once dirname(__DIR__, 2) . '/vendor/autoload.php';
 require_once dirname(__DIR__) . '/harness.php';
 require_once MCM_TESTS_DIR . '/entrypoints.php';
 require_once MCM_TESTS_DIR . '/database.php';
+require_once MCM_TESTS_DIR . '/mail.php';
 require_once MCM_TESTS_DIR . '/cases.php';
