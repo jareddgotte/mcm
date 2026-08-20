@@ -66,13 +66,24 @@ and the site itself pulls in no Composer package.
   it; 'guard csrf tokens' is where that literal is checked against what a page
   actually sees, so a wrong key would fail there rather than quietly leave every
   other case driving a session with no token.
-- The suite has no browser and does not want one. `tests/browser/xss.html` is
-  opened by hand instead: it renders a hostile list name, movie title, poster
-  path and movie identifier through the real scripts and reports what the
-  document ended up holding. Its own stylesheet keeps the tab strip on one line
-  on purpose - TabDrop moves any tab that wrapped into a dropdown, and
-  `renameList()` addresses tabs by position, so a wrapped strip makes it rename
-  the wrong tab.
+- The PHP suite has no browser and does not want one. `tests/browser/xss.html`
+  renders a hostile list name, movie title, poster path and movie identifier
+  through the real scripts and reports what the document ended up holding. Its
+  own stylesheet keeps the tab strip on one line on purpose - TabDrop moves any
+  tab that wrapped into a dropdown, and `renameList()` addresses tabs by
+  position, so a wrapped strip makes it rename the wrong tab. That layout
+  coupling is why it needs a real, layout-capable browser rather than a DOM
+  emulation: `tests/browser/run.js`, driven by `npm install && npx playwright
+  install chromium && node run.js` from `tests/browser` (README.md has the
+  full command), opens the page in a pinned Playwright/Chromium build, reads
+  its results table and fails the run on any failing check. It is a separate,
+  optional, longer-running check, not part of `php tests/run.php`; on a
+  machine with no Chromium available it prints a loud `SKIP:` naming the
+  missed coverage and exits zero, same as the database group below does for a
+  missing database. `tests/browser/package-lock.json` pins the Playwright
+  version; the Chromium build it downloads is pinned by that same version.
+  `run.js` reads the page's own results table rather than adding checks of its
+  own, and the page still opens by hand unchanged.
 - One group is optional and is the only part that wants more than a PHP CLI:
   `tests/database.php` runs a private, throw-away database server when
   `MCM_TEST_MYSQLD` or `PATH` offers a `mariadbd`/`mysqld`, and otherwise prints
