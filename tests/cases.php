@@ -6587,7 +6587,7 @@ t_group('the signed-in view renders through a TMDb fixture stub with the wrapper
  * one writing to a file.
  */
 
-t_group('mail sending against a local stand-in', array('fixture', 'server'), function () {
+t_group('mail sending against a local stand-in', array('server'), function () {
 	foreach (mcm_mail_runtimes() as $runtime) {
 		if ($runtime['problem'] !== '') {
 			t_skip('the mail path on ' . $runtime['label'], $runtime['problem']);

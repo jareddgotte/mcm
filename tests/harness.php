@@ -52,7 +52,9 @@ $GLOBALS['mcm_state'] = array(
 
 /**
  * What a group needs to run, as tags. A group declares its own at
- * registration; nothing is inferred from the name.
+ * registration; nothing is inferred from the name. Declare the one highest
+ * requirement rather than a set: the PHPUnit bridge has a method per tag, so a
+ * second tag runs the group twice there and the two runners stop agreeing.
  *
  *   source    reads the project's own files and starts no process at all
  *   fixture   builds a throw-away copy of the site and drives it as a child

@@ -27,13 +27,19 @@ and the site itself pulls in no Composer package.
     `tests/phpunit/`: one test method per requirement tag, because a PHPUnit
     group is a property of a method and not of a data set, and each data set is
     named after the group so `--filter` means the same under both.
-  - Both must stay green, and their assertion counts must agree. The exact
-    totals move whenever groups are added and must be read from an actual run
-    of both runners rather than quoted from memory, for the two configurations
-    being compared - without a database server, and with one.
-- Groups are selectable by name and by tag under both. A group declares what it
-  needs - `source`, `fixture`, `server` or `database`, see
-  `mcm_requirement_tags()` - and `mcm_group_tags()` derives the tier from that:
+  - Both must stay green, and their assertion counts must agree. On the current
+    baseline that is 2709 without a database server, where the database group's
+    8 cases skip loudly, and 3302 with one and nothing skipped. Measure a new
+    baseline from an actual run of both rather than deriving it by arithmetic:
+    the two numbers are what catch a group that quietly stopped being reached
+    under one runner, which is the one failure a green run looks exactly like.
+- Groups are selectable by name and by tag under both. A group declares the one
+  highest thing it needs - `source`, `fixture`, `server` or `database`, see
+  `mcm_requirement_tags()` - and never a set of them: the PHPUnit bridge has a
+  method per tag, so a second tag runs the group twice there and its assertions
+  are counted twice, which shows up as the two runners disagreeing. A group that
+  binds a socket declares `server` even though it builds a fixture too.
+  `mcm_group_tags()` derives the tier from that:
   `quick` for a group that listens on no socket, `integration` for the rest.
   The tier is derived in one place on purpose, so the line between the fast
   tier and the longer one can move without touching 52 registrations.
