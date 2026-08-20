@@ -205,7 +205,7 @@ The longer tier deliberately does not run on a pull request: it takes minutes, a
 
 **Every tool is pinned.**  The workflow actions are pinned by commit; PHPUnit by the committed `composer.lock` at one exact version; Playwright and the Chromium build it downloads by `/tests/browser/package-lock.json`; the database server by version and SHA-256 in `tools/quality/fetch-mariadb.sh`; and the PHP minor version by the workflow.  The exact PHP patch level is whatever the runner offers on the day, and each run writes it into its own summary, so a result stays reproducible from what it recorded.
 
-**What the checks deliberately do not do.**  They never deploy — deployment is manual and nothing here changes that, adds a step towards it, or adds a credential that would make one possible.  They add no repository secret.  They do not require themselves before a merge; that is a repository setting and turning it on is separate from building the check.  They do not retire `php tests/run.php`, which stays supported and is what the fast tier runs first.  And they choose no formatting standard and no static-analysis tool — see the reserved lane above.
+**What the checks deliberately do not do.**  They never deploy — deployment is manual and nothing here changes that, adds a step towards it, or adds a credential that would make one possible.  They add no repository secret.  They do not require themselves before a merge; that is a repository setting and turning it on is separate from building the check.  They do not retire `php tests/run.php`, which stays supported and is what the fast tier's `suite-quick` check runs.  And they choose no formatting standard and no static-analysis tool — see the reserved lane above.
 
 
 ### Notes

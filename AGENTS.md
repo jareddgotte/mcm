@@ -245,8 +245,8 @@ and the site itself pulls in no Composer package.
   green.
 - The checks never deploy, add no secret, reach neither TMDb nor the live site,
   and requiring one before a merge is a repository setting nobody has turned
-  on. `php tests/run.php` is not retired by any of this and is the first thing
-  the fast tier runs.
+  on. `php tests/run.php` is not retired by any of this and stays supported as
+  what the fast tier's `suite-quick` check runs.
 
 ## Mail sending
 
