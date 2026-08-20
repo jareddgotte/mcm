@@ -199,14 +199,15 @@ and the site itself pulls in no Composer package.
   `inc/showCaptcha.php`, which the browser requests directly for the
   registration captcha. A new entry point must include the bootstrap.
 - `session_start()` must exist in exactly one place, and every entry point must
-  load the bootstrap first. Both are asserted by `php tests/run.php`.
+  load the bootstrap first. Both are asserted by the suite, under either
+  runner.
 - The session cookie name stays at the server default. Renaming it would sign
   out every visitor of the live site.
 - Redirects go through `mcm_redirect()` / `mcm_redirect_target()` in the
   bootstrap. Never build a destination from `HTTP_HOST`, `SERVER_NAME` or
   `PHP_SELF`: the host comes from `MCM_CANONICAL_HOST` or is left out
-  altogether, and the path from `SCRIPT_NAME`. `php tests/run.php` asserts that
-  no `header()` call in the project's own code reads the request host.
+  altogether, and the path from `SCRIPT_NAME`. The suite asserts that no
+  `header()` call in the project's own code reads the request host.
 - HTTPS enforcement lives in the bootstrap, ahead of `session_start()` so no
   cookie goes out over plain HTTP, and is temporary (302/307) on purpose:
   `define('MCM_FORCE_HTTPS', false)` has to be able to take it back. Strict
@@ -476,8 +477,8 @@ and the site itself pulls in no Composer package.
   that cannot be served without it, `mcm_db_connect()` when the caller shows its
   own message instead (the `Login` and `Registration` classes), and
   `mcm_db_execute()` to run a prepared statement. `new PDO` and reads of
-  `DB_PASS` are confined to `inc/bootstrap.php`, and `php tests/run.php` asserts
-  it, as it asserts that no application code calls `var_dump()` and friends.
+  `DB_PASS` are confined to `inc/bootstrap.php`, and the suite asserts it, as
+  it asserts that no application code calls `var_dump()` and friends.
 - Never log the stack trace of a failed connection attempt. PHP records call
   arguments in a trace, and the arguments there are the DSN, the user and the
   password - on PHP 8.1 the password appears in full, and only PHP 8.3 masks it.
