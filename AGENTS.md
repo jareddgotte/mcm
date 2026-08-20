@@ -172,6 +172,60 @@ and the site itself pulls in no Composer package.
   re-seed instead of rolling back, and `users.user_registration_datetime`
   defaults to a zero date that a `NO_ZERO_DATE` server refuses - the dump's own
   `SET SQL_MODE` line is what makes it loadable. `README.md` has the detail.
+- The mail group is optional in the same way and for the same reason, and
+  `tests/mail.php` is its machinery. `MCM_TEST_PHP` names further PHP CLI
+  binaries, separated as `PATH` separates directories, and the mail cases ask
+  each of them the same question; with none set the check still runs, on the
+  runtime running the suite, and prints a loud notice saying what one data
+  point cannot show. `mcm_cli()` and `mcm_server_start()` take a `binary` for
+  that, and an `ini` beside it because `sendmail_path` is `PHP_INI_SYSTEM` and
+  so cannot be reached with `ini_set()` from a page.
+
+## Mail sending
+
+- Registration and password reset are the only things this site sends, and what
+  a send does is decided by the runtime rather than by this site.
+  `tests/pages/smtp_stub.php` is the far end of one, bound to `127.0.0.1`;
+  `tests/pages/sendmail_stub.php` is the far end of the other, reached through
+  `sendmail_path`. Neither needs a mail service, a credential or a network, and
+  what a send did is read off the stand-in's transcript rather than off a
+  return value: a client that dies inside `DATA` has already sent `MAIL FROM`
+  and `RCPT TO`, so only the terminator says a message was delivered.
+- The finding the group pins down: `inc/libs/class.smtp.php:622` and `:651`
+  call `each()`, which PHP 8.0 removed, from inside `SMTP::Data()`. The `@`
+  suppresses diagnostics, not the `Error`, and `PHPMailer::Send()` catches only
+  `phpmailerException`, so on a runtime without `each()` a send does not fail -
+  it dies, and takes the request with it. Verified on 8.1, 8.3 and 8.4;
+  `inc/libs/PHPMailer.php:1915` calls `get_magic_quotes_runtime()`, also
+  removed, but only on the attachment path, which nothing here reaches.
+- The consequence is `inc/classes/Registration.php`: it inserts the account,
+  sends, and deletes the account again only when the send returns `false`. A
+  send that dies never returns, so the delete is never reached and an
+  unactivated account survives with an activation code no message carried -
+  after which the same name and the same address are both refused as taken. The
+  control is the same page against a stand-in that refuses `DATA`: the send
+  returns `false`, the delete runs, and a retry works. That contrast is what
+  says the row survives because of *how* the send failed, not that it failed.
+- A visitor waits about ten seconds first. The library's clean-up sends `quit`,
+  but a server part way through a message can only read that as one more line
+  of the message, so nothing answers and the client waits out its own timeout
+  before the generic failure page appears. `--abandoned=close` on the stand-in
+  drops the connection at that line so the rest of the cases need not pay the
+  wait again; the default keeps it, and one case per runtime measures it.
+- That group is a characterization test: it asserts what the code does today,
+  so replacing or repairing the mail library will fail it by design, naming
+  every claim that has to be rewritten. Fixing it was deliberately not part of
+  the work that wrote it.
+- What is **not** established: which runtime the live site executes on. The
+  suite answers what each runtime it is given does; nothing here observes the
+  deployed one, and no conclusion about it should be read into these results.
+- Two things about the mail configuration that reading it quickly gets wrong.
+  Both callers ask `defined(EMAIL_SMTP_ENCRYPTION)` - the constant's *value*,
+  not its name - so `SMTPSecure` is never set whatever that value is; the
+  fixtures leave it empty, which is the one value for which that call means
+  what it looks like it means. And `EMAIL_USE_SMTP` is true in
+  `inc/config/example_config.php`, which also recommends it, so the failing
+  transport is the one a deployment following that file would be on.
 
 ## Development tooling
 

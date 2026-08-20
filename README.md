@@ -90,10 +90,32 @@ node run.js
 
 `npm install` and `npx playwright install chromium` are one-time setup: they fetch a pinned version of Playwright and a matching, pinned Chromium build, reproducibly from the committed `package-lock.json`.  `node run.js` then opens the page, reads its own results table, prints every failing check and why, and exits non-zero if any check failed.  On a machine with no Chromium available, it prints a loud `SKIP:` line naming the coverage that was missed and exits zero, the same contract the optional database group below keeps for a missing database server.  This automates only the checks the page already makes; it covers no more of the site than opening the page by hand always did.
 
+#### The mail check, and what it found
+Registration and password reset both end in sending a mail, and the suite drives those paths for real against **stand-ins that live in the fixture itself**: a small SMTP server bound to `127.0.0.1`, and a local mailbox that `sendmail_path` points at.  No mail service, no credential, no outbound network, and nothing installed.  What a send actually did is read off the stand-in's own transcript rather than off a return value.
+
+What a send does is decided by the PHP version it runs on, so one runtime is one data point.  Point the suite at the other PHP CLI binaries you have and it asks each of them the same question:
+
+```
+MCM_TEST_PHP=/path/to/php8.1:/path/to/php8.4 php tests/run.php
+```
+
+With none named the check still runs, on whichever PHP is running the suite, and prints a loud notice saying what a single runtime cannot show.
+
+**The finding, and it affects visitors.**  `/inc/libs/class.smtp.php` calls `each()`, which PHP **8.0 removed**, from inside the step that sends the message body.  On any PHP 8 runtime with `EMAIL_USE_SMTP` on — which is what `/inc/config/example_config.php` sets and recommends — a send does not fail, it **dies**, and takes the whole request with it:
+
+- The visitor waits about **ten seconds** — the mail client waiting out its own timeout — and is then shown the generic failure page, never the message the page keeps for a mail that could not be sent.
+- Registration **inserts the account first and deletes it again only when the send returns false**.  A send that dies never returns, so that clean-up never happens: an unactivated account is left behind, holding an activation code that no mail ever carried, and the same username and the same email address are then both refused as already taken.  The visitor cannot register, and cannot try again.
+- A password reset request writes the reset code before it sends, so the code is stored and the visitor is shown a failed page instead of being told to check their mail.
+- The `mail()` transport (`EMAIL_USE_SMTP` off) is **not** affected: the same message over that path is delivered normally.
+
+None of this is fixed here — establishing it was the job, and replacing the vendored mail library is a separate decision.  The suite now pins the behaviour down, so whoever changes it will be told exactly which claims their change rewrites.  Which PHP version this site's published copy runs on is **not** something this check establishes; the finding above is about any PHP 8 runtime.
+
 #### The optional database group
 Two groups are the exception, and both are optional.  Three kinds of regression cannot be seen without a real database — a call that sits in a method but is never reached, a value written to a column too narrow to hold it, and a query whose `WHERE` clause quietly stops restricting anything — so the suite runs a private, disposable database server when it can find one, and prints a loud notice saying exactly what went uncovered when it cannot.  Either way the suite passes; a run with no database is a normal run, and both runners behave the same way - under PHPUnit those groups are reported as skipped, with the same notice.
 
 The third kind is why the list endpoints are driven here as well: with rows to work on, the suite can sign in as a list's owner, as somebody else, and as nobody at all, and check the rows afterwards rather than only the response.  Without a database it still checks that an anonymous or malformed request is refused before a connection is opened.
+
+A third group joins them when a database is available: what a failed send leaves behind.  Whether the account row created by a registration survives a failed send is a question about a row, so it needs a server, and it is checked both ways — against a send that dies, which leaves the account behind, and against a send the far end refuses politely, which returns false, cleans the account up, and lets the visitor try again.
 
 The second of those groups is the movie authorization matrix: who may add, delete, move and import films, over two accounts with real lists and real rows.  Whose list a request named is a question only a database can answer, so without a server that matrix is skipped and what is left is the part that needs no database — a request with nobody signed in behind it is refused before the endpoint connects at all.
 
