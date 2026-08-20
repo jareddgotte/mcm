@@ -207,7 +207,6 @@ The longer tier deliberately does not run on a pull request: it takes minutes, a
 
 **What the checks deliberately do not do.**  They never deploy — deployment is manual and nothing here changes that, adds a step towards it, or adds a credential that would make one possible.  They add no repository secret.  They do not require themselves before a merge; that is a repository setting and turning it on is separate from building the check.  They do not retire `php tests/run.php`, which stays supported and is what the fast tier's `suite-quick` check runs.  And they choose no formatting standard and no static-analysis tool — see the reserved lane above.
 
-
 ### Notes
 - The endpoints that create, rename, reorder, share and delete a movie list require a signed-in owner.  A request from nobody is refused with `401`, a request for somebody else's list with `403`, and a request that is not the shape the page sends with `400`; every refusal answers with a fixed generic body and puts the reason in the server-side log only.  A request naming several lists at once changes none of them unless the caller owns all of them.
 - The `/inc` directory is served-but-internal, so `/inc/.htaccess` and `/inc/config/.htaccess` deny direct web access to it.  The registration captcha at `/inc/showCaptcha.php` is the one deliberate exception, since the browser requests that image directly.

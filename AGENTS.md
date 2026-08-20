@@ -97,9 +97,10 @@ and the site itself pulls in no Composer package.
   enough to fail the cases asserting a page logged nothing at all. The suite is
   green on 8.1, 8.3 and 8.4 and fails twelve assertions on 8.5 with a database
   server and seven without one, two of them the captcha's and the rest the
-  deprecation reaching a log a case asserts is empty; both defects are the site's, not the harness's, and the assertions
-  stay as they are until the captcha names its font absolutely and the vendored
-  mail library is dealt with.
+  deprecation reaching a log a case asserts is empty; both defects are the
+  site's, not the harness's, and the assertions stay as they are until the
+  captcha names its font absolutely and the vendored mail library is dealt
+  with.
 - A database outage is simulated without a database: the fixture's `DB_HOST`
   reaches the DSN verbatim, so `127.0.0.1;port=1` pins a port nothing can be
   listening on and the driver refuses the connection exactly as it would during
@@ -241,8 +242,8 @@ and the site itself pulls in no Composer package.
   its jobs are marked so: twelve assertions fail there with a database server
   and seven without one - the captcha font path, and `(boolean)` casts at
   `inc/libs/PHPMailer.php:776` and `:779` that 8.5 deprecates into the error
-  log, which fails every check asserting a page logged nothing. Both are the site's defects and neither may be silenced to obtain a
-  green.
+  log, which fails every check asserting a page logged nothing. Both are the
+  site's defects and neither may be silenced to obtain a green.
 - The checks never deploy, add no secret, reach neither TMDb nor the live site,
   and requiring one before a merge is a repository setting nobody has turned
   on. `php tests/run.php` is not retired by any of this and stays supported as
