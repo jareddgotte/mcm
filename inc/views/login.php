@@ -3,7 +3,7 @@
 // include html header and display php-login message/error
 $title = 'Login';
 $nav_active = 'Login';
-include('header.php');
+include(__DIR__ . '/header.php');
 
 // login form box
 if ($login->errors) {
@@ -44,4 +44,4 @@ if ($login->messages) {
 	</div>
 <?php
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');

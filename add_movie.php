@@ -15,7 +15,7 @@ require_once(__DIR__ . '/inc/guards.php');
 // needs a failure back as a value rather than as a refusal sent from inside a
 // helper. A page that has not asked them calls mcm_tmdb_resolve() instead.
 require_once(__DIR__ . '/inc/tmdb_proxy.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // A POST from a signed-in visitor, carrying this session's own token. Nobody
 // signed in has a collection to add to, and a page this site did not hand out

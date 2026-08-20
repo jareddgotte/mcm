@@ -2,7 +2,7 @@
 // include html header and display php-login message/error
 $title = 'Reset Password';
 //$nav_active = '';
-include('header.php');
+include(__DIR__ . '/header.php');
 
 if ($login->errors) {
 	foreach ($login->errors as $error) {
@@ -64,4 +64,4 @@ if ($login->passwordResetLinkIsValid() === true) {
 
 <?php
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');

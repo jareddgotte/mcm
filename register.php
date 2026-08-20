@@ -18,11 +18,11 @@
 
 // load php-login components
 require_once(__DIR__ . '/inc/bootstrap.php');
-require_once("inc/php-login.php");
+require_once(__DIR__ . '/inc/php-login.php');
 
 // create the registration object. when this object is created, it will do all registration stuff automatically
 // so this single line handles the entire registration process.
 $registration = new Registration();
 
 // showing the register view (with the registration form, and messages/errors)
-include("inc/views/register.php");
+include(__DIR__ . '/inc/views/register.php');

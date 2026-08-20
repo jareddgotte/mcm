@@ -23,7 +23,7 @@
  */
 
 require_once(__DIR__ . '/inc/bootstrap.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 /** One "key=value" line, sent on its way immediately. */
 function mcm_mail_report($key, $value)
@@ -53,6 +53,23 @@ mcm_mail_report('each_exists', function_exists('each') ? 'yes' : 'no');
 mcm_mail_report('get_magic_quotes_runtime_exists', function_exists('get_magic_quotes_runtime') ? 'yes' : 'no');
 mcm_mail_report('transport', EMAIL_USE_SMTP ? 'smtp' : 'mail');
 mcm_mail_report('path', $path);
+
+// Which classes this request has read at the moment before it sends anything.
+// Loading them is the autoloader's job now, so on a page that has done nothing
+// but load the bootstrap and php-login the answer is no - the same answer every
+// page that never sends gives, and the reason this one is worth reporting.
+mcm_mail_report('phpmailer_before', class_exists('PHPMailer', false) ? 'yes' : 'no');
+mcm_mail_report('smtp_before', class_exists('SMTP', false) ? 'yes' : 'no');
+
+// And which it has read by the time the request ends, whichever way it ends.
+// Reported from a shutdown function on purpose: on a runtime where the send
+// dies inside the call, nothing after that line runs, and "the send is what
+// loaded the library" would otherwise be unanswerable on exactly the runtimes
+// this project targets.
+register_shutdown_function(function () {
+	mcm_mail_report('phpmailer_after', class_exists('PHPMailer', false) ? 'yes' : 'no');
+	mcm_mail_report('smtp_after', class_exists('SMTP', false) ? 'yes' : 'no');
+});
 
 // Everything above this line is what the runtime and the configuration say.
 // Everything below it is what the send did.

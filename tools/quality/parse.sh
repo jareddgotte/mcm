@@ -10,9 +10,11 @@
 # the suite itself, and a case only ever drives the pages it is about.
 #
 # The list comes from git rather than from a walk of the directory, so it is
-# exactly what a deployment would carry: nothing generated, nothing installed,
-# and no copy somebody left lying about. Outside a git checkout it falls back
-# to a walk that skips the same generated trees.
+# exactly the set of files this repository serves: nothing installed, and
+# nothing untracked. That includes inc/autoload/, which is generated but
+# tracked and served, and which every other check deliberately looks past - a
+# generated file that does not parse is still a white page. Outside a git
+# checkout it falls back to a walk that skips the untracked generated trees.
 #
 #     tools/quality/parse.sh              sweep with php from PATH
 #     MCM_QUALITY_PHP=/path/to/php tools/quality/parse.sh

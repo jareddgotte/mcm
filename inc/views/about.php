@@ -3,7 +3,7 @@
 // include html header and display php-login message/error
 $title = 'About';
 $nav_active = 'About';
-include('header.php');
+include(__DIR__ . '/header.php');
 
 ?>
 	<div class="row">
@@ -23,4 +23,4 @@ include('header.php');
 	</div>
 <?php
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');

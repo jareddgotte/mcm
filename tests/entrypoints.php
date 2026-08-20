@@ -457,10 +457,19 @@ function mcm_count_debug_output($file)
  * a debug call in somebody else's library would fail a check about this site.
  * See "Development tooling" in AGENTS.md: nothing under /vendor is served, and
  * a checkout with no /vendor at all gives these checks the same answer.
+ *
+ * inc/autoload/ is excluded for the same reason and is the one exclusion that
+ * IS served: it is what Composer generates from the "autoload" section of
+ * composer.json, nobody edits it, and a check about how this project writes
+ * code has nothing to say about it. What it holds is checked instead by the
+ * "generated class autoloader" group, which reads the map it declares and
+ * compares that against the classes inc/classes/ and inc/libs/ actually
+ * declare - and tools/quality/parse.sh compiles every tracked file including
+ * these, because a generated file that does not parse is still a white page.
  */
 function mcm_source_walk_skips($entry)
 {
-	return in_array($entry, array('.', '..', '.git', 'tests', 'vendor', 'build', 'var', 'node_modules'), true);
+	return in_array($entry, array('.', '..', '.git', 'tests', 'vendor', 'autoload', 'build', 'var', 'node_modules'), true);
 }
 
 /** Every PHP file in the project, excluding this test suite. */
@@ -659,6 +668,104 @@ function mcm_check_entry_point($file, $root)
 		$problems[] = 'the include does not resolve to inc/bootstrap.php (' . $literal . ')';
 	}
 	return $problems;
+}
+
+/**
+ * The class-like names a file declares, in the order it declares them.
+ *
+ * Read from the file's own tokens, so a class named in prose, in a "new"
+ * expression or in a string is not mistaken for one this file declares - which
+ * is the whole point when the file being read is a 2,949-line vendored library
+ * that mentions its own class name throughout its documentation.
+ */
+function mcm_declared_classes($file)
+{
+	$tokens = mcm_tokens($file);
+	$total  = count($tokens);
+	$found  = array();
+
+	foreach ($tokens as $index => $token) {
+		if (!in_array($token['id'], array(T_CLASS, T_INTERFACE, T_TRAIT), true)) {
+			continue;
+		}
+		// "Foo::class" and "new class" are the two forms that are not a
+		// declaration; both are told apart by what sits either side.
+		if ($index > 0 && $tokens[$index - 1]['id'] === T_DOUBLE_COLON) {
+			continue;
+		}
+		for ($cursor = $index + 1; $cursor < $total; $cursor++) {
+			if ($tokens[$cursor]['id'] === T_STRING) {
+				$found[] = $tokens[$cursor]['text'];
+				break;
+			}
+			if ($tokens[$cursor]['text'] === '{' || $tokens[$cursor]['text'] === '(') {
+				break;
+			}
+		}
+	}
+	return $found;
+}
+
+/**
+ * The committed class map the site loads, as class name => absolute file.
+ *
+ * Read by including the generated file, which returns the array and does
+ * nothing else. Nothing is registered by doing so: the loader lives in a
+ * different file, and the suite wants the map as data rather than as a working
+ * autoloader - a check that asked a registered loader "can you find Login" is
+ * a check that would pass on any answer it produced.
+ */
+function mcm_autoload_classmap($root)
+{
+	$file = $root . '/inc/autoload/composer/autoload_classmap.php';
+
+	return is_readable($file) ? include $file : array();
+}
+
+/**
+ * The paths under inc/ whose classes the generated map is expected to cover.
+ *
+ * Written down rather than read out of composer.json, so that a directory
+ * quietly dropped from the "autoload" section fails this instead of agreeing
+ * with itself.
+ */
+function mcm_autoloaded_directories()
+{
+	return array('inc/classes', 'inc/libs');
+}
+
+/**
+ * Every entry point that loads inc/php-login.php, project-relative and sorted.
+ *
+ * A written-down list for the same reason mcm_guarded_entry_points() is one:
+ * these are the pages whose loading this project has decided on, and a list
+ * derived from the source would agree with whatever the source happens to do.
+ *
+ * All sixteen used to read inc/libs/PHPMailer.php on every request through
+ * this file; none of them does now. Seven of them go on to name Login or
+ * Registration and get it from the generated map; the other nine name no class
+ * at all and read none.
+ */
+function mcm_php_login_users()
+{
+	return array(
+		'about.php',
+		'add_movie.php',
+		'adjust_lists.php',
+		'create_list.php',
+		'delete_list.php',
+		'delete_movie.php',
+		'dialog.php',
+		'edit.php',
+		'index.php',
+		'login.php',
+		'move.php',
+		'password_reset.php',
+		'register.php',
+		'rename_list.php',
+		'share.php',
+		'share_lists.php',
+	);
 }
 
 /**

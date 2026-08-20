@@ -2,7 +2,7 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // Renaming somebody else's list is not a thing this endpoint does. The method,
 // the session and the token come first, so a request that fails any of them is

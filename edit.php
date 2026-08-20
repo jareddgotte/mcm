@@ -18,7 +18,7 @@
 
 // load php-login components
 require_once(__DIR__ . '/inc/bootstrap.php');
-require_once("inc/php-login.php");
+require_once(__DIR__ . '/inc/php-login.php');
 
 // create a login object. when this object is created, it will do all login/logout stuff automatically
 // so this single line handles the entire login process.
@@ -28,9 +28,9 @@ $login = new Login();
 if ($login->isUserLoggedIn() === true) {
     // the user is logged in. you can do whatever you want here.
     // for demonstration purposes, we simply show the "you are logged in" view.
-    include("inc/views/edit.php");
+    include(__DIR__ . '/inc/views/edit.php');
 } else {
     // the user is not logged in. you can do whatever you want here.
     // for demonstration purposes, we simply show the "you are not logged in" view.
-    include("inc/views/not_logged_in.php");
+    include(__DIR__ . '/inc/views/not_logged_in.php');
 }

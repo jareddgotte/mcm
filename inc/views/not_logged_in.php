@@ -1,7 +1,7 @@
 <?php
 
 // include html header and display php-login message/error
-include('header.php');
+include(__DIR__ . '/header.php');
 
 // login form box
 if ($login->errors) {
@@ -55,4 +55,4 @@ if ($login->messages) {
 
 <?php
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');

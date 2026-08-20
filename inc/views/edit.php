@@ -2,7 +2,7 @@
 // include html header and display php-login message/error
 $title = 'Edit Account';
 $nav_active = 'Account';
-include('header.php');
+include(__DIR__ . '/header.php');
 
 if ($login->errors) {
 	foreach ($login->errors as $error) {
@@ -79,4 +79,4 @@ if ($login->messages) {
 
 <?php
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');
