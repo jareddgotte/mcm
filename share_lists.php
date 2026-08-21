@@ -2,7 +2,7 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // Whether a list is readable by anybody with its link is the one setting on a
 // list that matters to somebody other than its owner. Only the owner sets it,

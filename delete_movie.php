@@ -6,7 +6,7 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // did they mean to ask, and is the list theirs - are what stands between a
 // request and somebody else's collection.
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // A POST from a signed-in visitor, carrying this session's own token. A delete
 // that arrived any other way is not one anybody asked for on purpose.

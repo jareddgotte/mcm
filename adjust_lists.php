@@ -2,7 +2,7 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // Reordering is a write like any other: it needs the method, the session and the
 // token, and the order it changes belongs to one account.

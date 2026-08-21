@@ -7,7 +7,7 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // one be pulled out of it. The cheap guards - method, session, token - settle
 // first, before either list identifier is read.
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // A POST from a signed-in visitor, carrying this session's own token, before
 // either end of the move is so much as read.

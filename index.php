@@ -37,7 +37,7 @@ require_once(__DIR__ . '/inc/bootstrap.php');
 // makes carry a token the mutation endpoints will accept.
 require_once(__DIR__ . '/inc/guards.php');
 require_once(__DIR__ . '/inc/tmdb_proxy.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 $login = new Login();
 
@@ -51,10 +51,10 @@ if (isset($_POST['login'])) {
 if ($login->isUserLoggedIn() === true) {
 	// the user is logged in. you can do whatever you want here.
 	// for demonstration purposes, we simply show the "you are logged in" view.
-	include("inc/views/logged_in.php");
+	include(__DIR__ . '/inc/views/logged_in.php');
 
 } else {
 	// the user is not logged in. you can do whatever you want here.
 	// for demonstration purposes, we simply show the "you are not logged in" view.
-	include("inc/views/not_logged_in.php");
+	include(__DIR__ . '/inc/views/not_logged_in.php');
 }

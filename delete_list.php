@@ -2,7 +2,7 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // A deletion cannot be undone, so this is the endpoint that least wants to run
 // for a visitor who is not signed in, or for a request that visitor did not make

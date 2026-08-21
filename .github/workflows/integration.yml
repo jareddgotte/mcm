@@ -20,7 +20,7 @@
 # private instance created and destroyed by the run. It deploys nothing and
 # needs no secret.
 #
-# PHP 8.3 is the target and gates. PHP 8.5 never gates: seven assertions fail
+# PHP 8.3 is the target and gates. PHP 8.5 never gates: four assertions fail
 # there today - the captcha's relative font path and a cast the vendored mail
 # library uses that 8.5 deprecates - and those are the site's own defects,
 # recorded rather than silenced. See AGENTS.md.

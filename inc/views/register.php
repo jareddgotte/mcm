@@ -2,7 +2,7 @@
 // include html header and display php-login message/error
 $title = 'Register';
 $nav_active = 'Register';
-include('header.php');
+include(__DIR__ . '/header.php');
 
 // show negative messages
 if ($registration->errors) {
@@ -64,4 +64,4 @@ else {
 <?php
 }
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');

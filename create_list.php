@@ -2,7 +2,7 @@
 
 require_once(__DIR__ . '/inc/bootstrap.php');
 require_once(__DIR__ . '/inc/guards.php');
-require_once('inc/php-login.php');
+require_once(__DIR__ . '/inc/php-login.php');
 
 // Nobody creates a list on somebody else's behalf, and nobody creates one from a
 // page this site did not hand out. All three run before anything is read, so a

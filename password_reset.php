@@ -18,7 +18,7 @@
 
 // load php-login components
 require_once(__DIR__ . '/inc/bootstrap.php');
-require_once("inc/php-login.php");
+require_once(__DIR__ . '/inc/php-login.php');
 
 // create a login object. when this object is created, it will do all login/logout stuff automatically
 // so this single line handles the entire login process.
@@ -27,9 +27,9 @@ $login = new Login();
 // the user has just successfully entered a new password
 // so we show the index page = the login page
 if ($login->passwordResetWasSuccessful() === true && $login->passwordResetLinkIsValid() !== true) {
-    include("inc/views/not_logged_in.php");
+    include(__DIR__ . '/inc/views/not_logged_in.php');
 
 } else {
     // show the request-a-password-reset or type-your-new-password form
-    include("inc/views/password_reset.php");
+    include(__DIR__ . '/inc/views/password_reset.php');
 }

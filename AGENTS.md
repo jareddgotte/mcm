@@ -8,7 +8,8 @@ A legacy PHP movie-collection manager built on the php-login script. There is no
 build step; the `.php` files in the document root are the application. Setup is
 documented in `README.md`. `composer.json` / `composer.lock` exist for
 development tooling only - see [Development tooling](#development-tooling) -
-and the site itself pulls in no Composer package.
+and the site itself installs no Composer package: the one thing Composer
+produces that a request reads is the committed class map under `inc/autoload/`.
 
 ## Tests
 
@@ -28,10 +29,10 @@ and the site itself pulls in no Composer package.
     group is a property of a method and not of a data set, and each data set is
     named after the group so `--filter` means the same under both.
   - Both must stay green, and their assertion counts must agree. On the current
-    baseline that is 2709 without a database server, where the database group's
-    8 cases skip loudly, and 3302 with one and nothing skipped - both with
-    `MCM_TEST_PHP` naming two further runtimes, which is where 88 of those
-    assertions come from; with none named the first number is 2621 and there
+    baseline that is 3329 without a database server, where the database group's
+    8 cases skip loudly, and 3922 with one and nothing skipped - both with
+    `MCM_TEST_PHP` naming two further runtimes, which is where 96 of those
+    assertions come from; with none named the first number is 3233 and there
     are 9 skips, the extra one being the mail matrix. Measure a new baseline
     from an actual run of both rather than deriving it by arithmetic: the two
     numbers are what catch a group that quietly stopped being reached under one
@@ -95,12 +96,15 @@ and the site itself pulls in no Composer package.
   beside it: `inc/libs/PHPMailer.php:776` and `:779` use a `(boolean)` cast,
   which 8.5 deprecates, and the deprecation lands in the error log - which is
   enough to fail the cases asserting a page logged nothing at all. The suite is
-  green on 8.1, 8.3 and 8.4 and fails twelve assertions on 8.5 with a database
-  server and seven without one, two of them the captcha's and the rest the
-  deprecation reaching a log a case asserts is empty; both defects are the
-  site's, not the harness's, and the assertions stay as they are until the
-  captcha names its font absolutely and the vendored mail library is dealt
-  with.
+  green on 8.1, 8.3 and 8.4 and fails four assertions on 8.5 either way, two of
+  them the captcha's and two the deprecation reaching a log the mail cases
+  assert is empty; both defects are the site's, not the harness's, and the
+  assertions stay as they are until the captcha names its font absolutely and
+  the vendored mail library is dealt with. It used to be twelve with a database
+  server and seven without: the eight that went are pages that logged the
+  deprecation only because they read the mail library without needing it, which
+  is what the generated autoloader stopped them doing. Nothing was silenced -
+  the deprecation still lands on the two paths that do send mail.
 - A database outage is simulated without a database: the fixture's `DB_HOST`
   reaches the DSN verbatim, so `127.0.0.1;port=1` pins a port nothing can be
   listening on and the driver refuses the connection exactly as it would during
@@ -239,10 +243,10 @@ and the site itself pulls in no Composer package.
   anything, and no check calls it.
 - PHP 8.3 is the target and the run that speaks for the project. 8.1 and 8.4
   gate as well but are compatibility evidence, not targets. 8.5 never gates and
-  its jobs are marked so: twelve assertions fail there with a database server
-  and seven without one - the captcha font path, and `(boolean)` casts at
+  its jobs are marked so: four assertions fail there, with a database server or
+  without - the captcha font path, and `(boolean)` casts at
   `inc/libs/PHPMailer.php:776` and `:779` that 8.5 deprecates into the error
-  log, which fails every check asserting a page logged nothing. Both are the
+  log, which fails the mail cases asserting a page logged nothing. Both are the
   site's defects and neither may be silenced to obtain a green.
 - The checks never deploy, add no secret, reach neither TMDb nor the live site,
   and requiring one before a merge is a repository setting nobody has turned
@@ -299,7 +303,10 @@ and the site itself pulls in no Composer package.
 
 - `composer.json` and `composer.lock` are development tooling only: `require`
   stays empty because nothing the site serves is a Composer package, and
-  anything Composer manages lives under `require-dev`. `php tests/run.php`
+  anything Composer manages lives under `require-dev`. Its one production
+  output is the class map under `inc/autoload/` - generated, committed, and
+  described under "Request lifecycle"; `autoloader-suffix` is pinned there so
+  regenerating an unchanged tree produces no diff. `php tests/run.php`
   needs nothing installed and gives the same assertion count with or without a
   `/vendor` tree, so Composer is optional and never a precondition for the
   suite.
@@ -331,6 +338,29 @@ and the site itself pulls in no Composer package.
 - Public entry points are every `*.php` in the document root plus
   `inc/showCaptcha.php`, which the browser requests directly for the
   registration captcha. A new entry point must include the bootstrap.
+- Classes are loaded on demand, never required by hand. `inc/autoload/` is a
+  committed class map generated by `tools/dump-autoload.sh` from the `autoload`
+  section of `composer.json`; the bootstrap registers it, and the site installs
+  no Composer package to use it - `require` in that manifest is empty and stays
+  empty. Regenerate and commit after adding, renaming or moving a class under
+  `inc/classes/` or `inc/libs/`; the `generated class autoloader` group fails if
+  you forget, because it compares the committed map against what those
+  directories declare. The bootstrap falls back to requiring the three files
+  `inc/php-login.php` used to require when the generated map is unavailable, so
+  a tree without it degrades to the old loading rather than to an error -
+  `what a request loads` drives every page both ways. `Composer\InstalledVersions`
+  is in the map with no file behind it, because no package is installed; the same
+  group checks that nothing in this project names it.
+- Every include names its target relative to the file that names it
+  (`__DIR__` / `dirname(__FILE__)`), never to the process working directory. The
+  one deliberate exception is the language-file existence check in
+  `inc/php-login.php`, documented at its call site: it has always resolved
+  against the document root, which holds no `lang/` directory, so every request
+  has always fallen back to English, and anchoring it would start serving three
+  translations that never have been.
+- `inc/php-login.php` declares the site's PHP floor, and 7.0.0 is what the code
+  actually needs: `inc/dialog_trailers.php` uses `<=>` and `inc/security.php`
+  calls `random_bytes()`. That is a floor, not a target - 8.3 is the target.
 - `session_start()` must exist in exactly one place, and every entry point must
   load the bootstrap first. Both are asserted by the suite, under either
   runner.

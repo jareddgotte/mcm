@@ -102,7 +102,7 @@ $(function() {
 
 $title = 'Share';
 $sharing = true;
-include('header.php');
+include(__DIR__ . '/header.php');
 
 // if you need users's information, just put them into the $_SESSION variable and output them here
 
@@ -154,4 +154,4 @@ foreach($movie_lists as $v) {
 	</div><!-- /.modal -->
 <?php
 // include html footer
-include('footer.php');
+include(__DIR__ . '/footer.php');
