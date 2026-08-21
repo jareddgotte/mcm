@@ -22,15 +22,16 @@
 #   2. the bug, reproduced - the OLD pattern was blind to a found-but-failed
 #      server (fixture B): it recorded PASS even though every database
 #      group was skipped.
-#   3. the fix - the NEW pattern, the one tools/quality/integration.sh
-#      actually runs today (checked directly against that file, not just
-#      asserted here), catches both fixtures and turns --require database
-#      into a FAIL for both.
+#   3. the fix - the NEW pattern, held in lib.sh's Q_DB_SKIP_PATTERN and used
+#      here and by tools/quality/integration.sh's database check alike so the
+#      two cannot drift apart, catches both fixtures and turns --require
+#      database into a FAIL for both.
 #
 # It then runs a positive control with a real mariadb-install-db, if one is
 # available: an ambient option file naming "user = mysql" makes
 # initialization fail exactly as fixture B describes, and --no-defaults -
-# the fix in tests/database.php - is what makes it succeed again. Without a
+# the fix in tests/database.php - is what makes it succeed again, both by
+# hand and through tests/database.php's own mcm_db_initialize(). Without a
 # MariaDB install script on hand this half prints a loud SKIP, the same
 # contract every other optional prerequisite in this tier keeps.
 #
@@ -98,7 +99,10 @@ PASS: 3329 assertions, 0 failures, 8 skipped in 48.79s
 EOF
 
 old_pattern='no mariadbd or mysqld was found|MCM_TEST_MYSQLD is (not set|set to)'
-new_pattern='SKIPPED: the optional real-database group did not run\.'
+# The same constant tools/quality/integration.sh's database check uses (see
+# lib.sh), so this regression cannot silently drift from what that check
+# actually runs.
+new_pattern="$Q_DB_SKIP_PATTERN"
 
 Q_REQUIRED=database
 
@@ -120,14 +124,6 @@ section 'the fix: the new pattern catches it'
 q_coverage db-failed-new 'new pattern, init failed' "$fixture_failed" "$new_pattern"
 q_enforce db-failed-new database
 check 'new pattern catches it - PASS becomes FAIL' "$(q_status_of db-failed-new)" FAIL
-
-section 'the fix is the pattern integration.sh actually runs'
-if grep -Fq "'$new_pattern' \\" "$Q_ROOT/tools/quality/integration.sh"; then
-	printf 'ok    tools/quality/integration.sh uses the widened pattern\n'
-else
-	printf 'FAIL  tools/quality/integration.sh does not contain the expected pattern - this regression has drifted from the real check\n'
-	fail=1
-fi
 
 # -- positive control: real initialization, with and without --no-defaults --
 
@@ -162,12 +158,28 @@ else
 	with_status=$?
 	check 'with --no-defaults (the fix), the same option file cannot reach it' "$with_status" 0
 
-	if grep -Fq "'--no-defaults'" "$Q_ROOT/tests/database.php"; then
-		printf 'ok    tests/database.php passes --no-defaults on the MariaDB initialization path\n'
-	else
-		printf 'FAIL  tests/database.php no longer passes --no-defaults - this regression has drifted from the real fix\n'
-		fail=1
-	fi
+	# Exercise tests/database.php's own initialization function directly, under
+	# the same hostile option file, rather than re-deriving the command by hand:
+	# this proves the real fix, not a copy of it.
+	mkdir -p "$pc_root/data-c/data"
+	MCM_TEST_MYSQLD="$MCM_TEST_MYSQLD" HOME="$pc_root" "$(q_php)" -r '
+		require $argv[1] . "/tests/database.php";
+		$binaries = mcm_db_binaries();
+		if ($binaries["problem"] !== "") {
+			fwrite(STDERR, $binaries["problem"] . PHP_EOL);
+			exit(2);
+		}
+		try {
+			mcm_db_initialize($binaries, $argv[2]);
+			exit(0);
+		} catch (Throwable $e) {
+			fwrite(STDERR, $e->getMessage() . PHP_EOL);
+			exit(1);
+		}
+	' "$Q_ROOT" "$pc_root/data-c" \
+		> "$pc_root/with-no-defaults-real.log" 2>&1
+	with_real_status=$?
+	check 'tests/database.php initialization (the real fix) succeeds under the same option file' "$with_real_status" 0
 fi
 
 printf '\n'

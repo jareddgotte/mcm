@@ -32,6 +32,13 @@ Q_DIR=""
 Q_RESULTS=""
 Q_STARTED=0
 
+# The database group's own universal skip banner (mcm_db_skip_notice() in
+# tests/database.php), lifted here once so the database-coverage check in
+# tools/quality/integration.sh and its regression in
+# tools/quality/regressions/database-coverage.sh read the same pattern rather
+# than each naming their own copy of it.
+Q_DB_SKIP_PATTERN='SKIPPED: the optional real-database group did not run\.'
+
 # Prerequisites the caller insisted on, as a comma-delimited list. Empty means
 # "loud skips are acceptable", which is the default and what a developer wants;
 # an automated run names them so that a missing browser or database server is a

@@ -130,7 +130,7 @@ q_note_skips suite-full
 # just one that was never there - is caught the same way.
 q_coverage database 'database-backed coverage' \
 	"$Q_DIR/suite-full.log" \
-	'SKIPPED: the optional real-database group did not run\.' \
+	"$Q_DB_SKIP_PATTERN" \
 	'a call that is present in a method but never reached' \
 	'a value written to a column too narrow to hold it' \
 	'a WHERE clause that stops restricting the rows it reads or changes' \
