@@ -37,29 +37,6 @@ while ($row = $query->fetch(PDO::FETCH_OBJ)) {
 ksort($movie_lists);
 //var_dump($movie_lists);
 
-// recursively convert any string, array or object to utf8 (from https://stackoverflow.com/a/38398648/2901323)
-function convert_to_utf8_recursively($dat) {
-  if (is_string($dat)) {
-    return utf8_encode($dat);
-  }
-  elseif (is_array($dat)) {
-    $ret = [];
-    foreach ($dat as $i => $d) {
-      $ret[$i] = convert_to_utf8_recursively($d);
-    }
-    return $ret;
-  }
-  elseif (is_object($dat)) {
-    foreach ($dat as $i => $d) {
-      $dat->$i = convert_to_utf8_recursively($d);
-    }
-    return $dat;
-  }
-  else {
-    return $dat;
-  }
-}
-
 // Construct our javascript db var
 $db_var = array();
 foreach ($movie_lists as $v) {
@@ -70,7 +47,7 @@ foreach ($movie_lists as $v) {
 }
 // mcm_js() keeps list names and TMDb titles from closing the script element
 // they are about to be embedded in.
-$db_var = mcm_js(convert_to_utf8_recursively($db_var));
+$db_var = mcm_js($db_var);
 //var_dump($db_var);
 
 // use to debug any json errors

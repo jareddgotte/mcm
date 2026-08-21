@@ -30,10 +30,10 @@ produces that a request reads is the committed class map under `inc/autoload/`.
     named after the group so `--filter` means the same under both.
   - Both must stay green, and their assertion counts must agree. On the current
     baseline that is 3329 without a database server, where the database group's
-    8 cases skip loudly, and 3922 with one and nothing skipped - both with
+    9 cases skip loudly, and 3934 with one and nothing skipped - both with
     `MCM_TEST_PHP` naming two further runtimes, which is where 96 of those
     assertions come from; with none named the first number is 3233 and there
-    are 9 skips, the extra one being the mail matrix. Measure a new baseline
+    are 10 skips, the extra one being the mail matrix. Measure a new baseline
     from an actual run of both rather than deriving it by arithmetic: the two
     numbers are what catch a group that quietly stopped being reached under one
     runner, which is the one failure a green run looks exactly like, and

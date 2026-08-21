@@ -6554,6 +6554,108 @@ t_group('the signed-in view renders through a TMDb fixture stub with the wrapper
 });
 
 /*
+ * The signed-in collection used to run every string through
+ * convert_to_utf8_recursively(), which called the deprecated utf8_encode() -
+ * itself an ISO-8859-1-to-UTF-8 transform, not a validator - on values that
+ * were already UTF-8 out of the database. Run against bytes that are not
+ * ASCII, that mangled them; the public sharing page never called it and
+ * always rendered the same rows correctly. This group seeds one list and one
+ * film with non-ASCII names, loads both views in the same run, and proves the
+ * signed-in page now carries the exact seeded bytes - the same bytes the
+ * sharing page carries - and logs no utf8_encode() deprecation.
+ */
+
+t_group('the signed-in collection renders non-ASCII values without re-encoding them', array('database'), function () {
+	$server = mcm_db_server();
+	if ($server === null) {
+		t_skip('the non-ASCII rendering case', mcm_db_skip_reason());
+		return;
+	}
+	if (!t_same('', $server['schema_error'], 'the tracked schema loaded for the non-ASCII rendering case')) {
+		return;
+	}
+
+	$pdo   = mcm_db_reset_collection($server);
+	$alice = mcm_db_seed_user($pdo, 'alice', 'p' . bin2hex(random_bytes(6)));
+
+	$list_name  = "Amélie's café list ☂";
+	$film_title = "Le Fabuleux Destin d'Amélie Poulain";
+
+	$list = mcm_db_seed_list($pdo, $alice, $list_name, 0, 1);
+	mcm_db_seed_master_movie($pdo, 901, $film_title, '2001-04-25');
+	mcm_db_seed_movie($pdo, $list, 901);
+
+	$fixture = mcm_db_fixture('non-ascii-rendering', $server);
+	$app     = mcm_server_start($fixture);
+	$stub    = mcm_server_start($fixture);
+
+	// A helper local to this group: the JSON db literal never contains a raw
+	// newline (json_encode() escapes control characters), so it is the whole
+	// of the first line after "var db = ".
+	$extract_db = function ($body) {
+		if (preg_match('/var db = (.+)\r?\n/', $body, $match) !== 1) {
+			return null;
+		}
+		return json_decode($match[1], true);
+	};
+
+	try {
+		mcm_tmdb_configure($fixture, array(
+			'DB_HOST'            => mcm_db_host_setting($server),
+			'DB_NAME'            => $server['database'],
+			'DB_USER'            => $server['user'],
+			'DB_PASS'            => $server['password'],
+			'MCM_TMDB_BASE_URL'  => 'http://127.0.0.1:' . $stub['port'] . '/tmdb_stub.php',
+			'MCM_TMDB_CACHE_DIR' => $fixture['root'] . '/cache',
+		));
+
+		$alice_session = 'e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4';
+		mcm_seed_signed_in($fixture, $alice_session, array('user_name' => 'alice', 'user_email' => 'alice@example.test', 'user_id' => $alice, 'user_logged_in' => 1));
+		$as_alice = mcm_session_headers($alice_session);
+
+		$signed_in = mcm_http($app, '/index.php', $as_alice);
+		$shared    = mcm_http($app, '/share.php?id=' . $alice);
+
+		t_same(200, $signed_in['status'], 'the signed-in view renders');
+		t_same(200, $shared['status'], 'the public sharing view renders');
+
+		// The byte comparisons below are what fails against the bug on every
+		// supported runtime, whether or not that runtime deprecates
+		// utf8_encode(): the re-encoding mangles a byte sequence that was
+		// already UTF-8. This is the narrower, runtime-dependent half of the
+		// same regression - on a runtime that deprecates the call, rendering
+		// non-ASCII values used to log it, and the view logs unrelated things
+		// (an undefined-variable notice, a TMDb cache-miss note) besides.
+		t_lacks('utf8_encode', $signed_in['log'], 'the signed-in view logs no utf8_encode() deprecation while rendering non-ASCII values');
+
+		$signed_in_db = call_user_func($extract_db, $signed_in['body']);
+		$shared_db    = call_user_func($extract_db, $shared['body']);
+
+		t_ok(is_array($signed_in_db), 'the signed-in view embeds a decodable db literal', $signed_in['body']);
+		t_ok(is_array($shared_db), 'the sharing view embeds a decodable db literal', $shared['body']);
+
+		$signed_in_name  = isset($signed_in_db[0]['list_name']) ? $signed_in_db[0]['list_name'] : null;
+		$shared_name     = isset($shared_db[0]['list_name']) ? $shared_db[0]['list_name'] : null;
+		$signed_in_title = isset($signed_in_db[0]['movie_details'][0]['title']) ? $signed_in_db[0]['movie_details'][0]['title'] : null;
+		$shared_title    = isset($shared_db[0]['movie_details'][0]['title']) ? $shared_db[0]['movie_details'][0]['title'] : null;
+
+		t_same($list_name, $signed_in_name, 'the signed-in view carries the seeded list name exactly, unmangled');
+		t_same($list_name, $shared_name, 'the sharing view carries the seeded list name exactly');
+		t_same($signed_in_name, $shared_name, 'both views carry the same bytes for the list name');
+
+		t_same($film_title, $signed_in_title, 'the signed-in view carries the seeded film title exactly, unmangled');
+		t_same($film_title, $shared_title, 'the sharing view carries the seeded film title exactly');
+		t_same($signed_in_title, $shared_title, 'both views carry the same bytes for the film title');
+	} catch (Throwable $error) {
+		mcm_server_stop($app);
+		mcm_server_stop($stub);
+		throw $error;
+	}
+	mcm_server_stop($app);
+	mcm_server_stop($stub);
+});
+
+/*
  * ---------------------------------------------------------------------------
  * Mail sending
  * ---------------------------------------------------------------------------
