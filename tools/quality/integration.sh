@@ -124,9 +124,13 @@ q_run suite-full 'every group, dependency-free runner' \
 q_note_skips suite-full
 
 # What the run itself said about the two optional halves of its own coverage.
+# The pattern keys on the group's own universal skip banner
+# (mcm_db_skip_notice() in tests/database.php) rather than one or two known
+# reasons, so a server that was found but whose initialization failed - not
+# just one that was never there - is caught the same way.
 q_coverage database 'database-backed coverage' \
 	"$Q_DIR/suite-full.log" \
-	'no mariadbd or mysqld was found|MCM_TEST_MYSQLD is (not set|set to)' \
+	'SKIPPED: the optional real-database group did not run\.' \
 	'a call that is present in a method but never reached' \
 	'a value written to a column too narrow to hold it' \
 	'a WHERE clause that stops restricting the rows it reads or changes' \
