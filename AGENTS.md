@@ -229,7 +229,16 @@ produces that a request reads is the committed class map under `inc/autoload/`.
   passes `browser,database,mail-runtimes,phpunit` for exactly that reason.
   `q_coverage()` in `tools/quality/lib.sh` decides that from what the run
   printed rather than from what the machine has installed - the question worth
-  recording is whether the groups ran, not whether a binary exists.
+  recording is whether the groups ran, not whether a binary exists. The
+  database check's pattern keys on the group's own universal skip banner
+  (`mcm_db_skip_notice()` in `tests/database.php`), so a server that was
+  found but whose initialization failed is caught the same way as one that
+  was never there; `tools/quality/regressions/database-coverage.sh` is the
+  regression for that, with a positive control that a real
+  `mariadb-install-db` only survives an ambient `user=` option file with
+  `--no-defaults`, which is also why the MariaDB initialization path in
+  `tests/database.php` passes it, matching the server-start and
+  MySQL-initialization paths beside it.
 - The lint lane is created empty and reports `RESERVED`, never `PASS`. Which
   formatter, indentation width, static analyser and rule set fill it is a
   separate decision; `.editorconfig` is an input to it rather than the answer.

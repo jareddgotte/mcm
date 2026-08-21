@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+#
+# Regression for the database-coverage false pass: the longer tier's
+# `database` check (tools/quality/integration.sh, driven through
+# tools/quality/lib.sh's q_coverage()) used to key on a narrow pattern that
+# matched only "no mariadbd/mysqld was found". A server that WAS found, but
+# whose data-directory initialization then failed - the case a system
+# MySQL/MariaDB option file naming a "user" produces, see the positive
+# control below - still emits the database group's own universal skip
+# banner (mcm_db_skip_notice() in tests/database.php), which the narrow
+# pattern did not match. q_coverage() then fell through to its PASS branch,
+# so --require database had nothing to rewrite: a run where every
+# database-backed group was skipped still recorded PASS.
+#
+# This script proves three things against the checked-in fixtures below,
+# which are lifted verbatim from a captured GitHub Actions integration run
+# (the exact evidence in the linked issue) plus a synthetic genuinely-absent
+# case:
+#
+#   1. negative control - the OLD pattern already caught a genuinely absent
+#      server (fixture A) and still does; nothing about that regressed.
+#   2. the bug, reproduced - the OLD pattern was blind to a found-but-failed
+#      server (fixture B): it recorded PASS even though every database
+#      group was skipped.
+#   3. the fix - the NEW pattern, held in lib.sh's Q_DB_SKIP_PATTERN and used
+#      here and by tools/quality/integration.sh's database check alike so the
+#      two cannot drift apart, catches both fixtures and turns --require
+#      database into a FAIL for both.
+#
+# It then runs a positive control with a real mariadb-install-db, if one is
+# available: an ambient option file naming "user = mysql" makes
+# initialization fail exactly as fixture B describes, and --no-defaults -
+# the fix in tests/database.php - is what makes it succeed again, both by
+# hand and through tests/database.php's own mcm_db_initialize(). Without a
+# MariaDB install script on hand this half prints a loud SKIP, the same
+# contract every other optional prerequisite in this tier keeps.
+#
+# Exits non-zero if any of the above does not hold.
+
+set -u
+
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib.sh"
+
+q_init db-coverage-regression
+fail=0
+
+section () { printf '\n=== %s ===\n' "$1"; }
+
+check () {
+	local desc="$1" got="$2" want="$3"
+	if [ "$got" = "$want" ]; then
+		printf 'ok    %s (%s)\n' "$desc" "$got"
+	else
+		printf 'FAIL  %s: got "%s", want "%s"\n' "$desc" "$got" "$want"
+		fail=1
+	fi
+}
+
+# -- fixtures -----------------------------------------------------------------
+
+# A: a genuinely absent server. Goes through the same universal skip banner
+# as B, with a different Reason: line - mcm_db_skip_notice() in
+# tests/database.php builds both the same way. The pattern always caught
+# this one because its reason line names "no mariadbd or mysqld was found".
+fixture_absent="$Q_DIR/fixture-absent.log"
+cat > "$fixture_absent" <<'EOF'
+
+  ------------------------------------------------------------------------
+  SKIPPED: the optional real-database group did not run.
+  Reason: no mariadbd or mysqld was found on PATH, and MCM_TEST_MYSQLD is not set
+
+  Not covered by this run:
+    1. a call that is present in a method but never reached
+    2. a value written to a column too narrow to hold it
+    3. a WHERE clause that stops restricting the rows it reads or changes
+    4. whose list a request names, and what an authorized import actually writes
+
+PASS: 3329 assertions, 0 failures, 8 skipped in 40.00s
+EOF
+
+# B: a server was found, but mariadb-install-db's chown step failed - the
+# database group's own universal skip banner, reproduced verbatim from a
+# captured GitHub Actions integration run. This is the case the old pattern
+# missed.
+fixture_failed="$Q_DIR/fixture-init-failed.log"
+cat > "$fixture_failed" <<'EOF'
+
+  ------------------------------------------------------------------------
+  SKIPPED: the optional real-database group did not run.
+  Reason: could not create a data directory (status 1): chown: changing ownership of '/tmp/mcm-tests-4438-65fc5251/database/data': Operation not permitted
+
+  Not covered by this run:
+    1. a call that is present in a method but never reached
+    2. a value written to a column too narrow to hold it
+    3. a WHERE clause that stops restricting the rows it reads or changes
+    4. whose list a request names, and what an authorized import actually writes
+
+PASS: 3329 assertions, 0 failures, 8 skipped in 48.79s
+EOF
+
+old_pattern='no mariadbd or mysqld was found|MCM_TEST_MYSQLD is (not set|set to)'
+# The same constant tools/quality/integration.sh's database check uses (see
+# lib.sh), so this regression cannot silently drift from what that check
+# actually runs.
+new_pattern="$Q_DB_SKIP_PATTERN"
+
+Q_REQUIRED=database
+
+section 'negative control: a genuinely absent server, old and new pattern'
+q_coverage db-absent-old 'old pattern, absent server' "$fixture_absent" "$old_pattern"
+q_enforce db-absent-old database
+check 'old pattern catches a genuinely absent server' "$(q_status_of db-absent-old)" FAIL
+
+q_coverage db-absent-new 'new pattern, absent server' "$fixture_absent" "$new_pattern"
+q_enforce db-absent-new database
+check 'new pattern still catches a genuinely absent server' "$(q_status_of db-absent-new)" FAIL
+
+section 'the bug: a server was found but initialization failed'
+q_coverage db-failed-old 'old pattern, init failed' "$fixture_failed" "$old_pattern"
+q_enforce db-failed-old database
+check 'old pattern missed it - the reported false pass' "$(q_status_of db-failed-old)" PASS
+
+section 'the fix: the new pattern catches it'
+q_coverage db-failed-new 'new pattern, init failed' "$fixture_failed" "$new_pattern"
+q_enforce db-failed-new database
+check 'new pattern catches it - PASS becomes FAIL' "$(q_status_of db-failed-new)" FAIL
+
+# -- positive control: real initialization, with and without --no-defaults --
+
+section 'positive control: real mariadb-install-db, ambient user=mysql option file'
+
+install_script=""
+if [ -n "${MCM_TEST_MYSQLD:-}" ] && [ -x "$MCM_TEST_MYSQLD" ]; then
+	basedir=$(cd "$(dirname "$MCM_TEST_MYSQLD")/.." && pwd)
+	for candidate in scripts/mariadb-install-db scripts/mysql_install_db; do
+		if [ -x "$basedir/$candidate" ]; then
+			install_script="$basedir/$candidate"
+			break
+		fi
+	done
+fi
+
+if [ -z "$install_script" ]; then
+	printf 'SKIP: no mariadb-install-db to hand - set MCM_TEST_MYSQLD to a mariadbd binary\n'
+	printf 'SKIP: the positive control that --no-defaults is what fixes the initialization failure\n'
+else
+	pc_root="$Q_DIR/positive-control"
+	mkdir -p "$pc_root/data-a" "$pc_root/data-b"
+	printf '[mysqld]\nuser = mysql\n' > "$pc_root/.my.cnf"
+
+	HOME="$pc_root" "$install_script" --basedir="$basedir" --datadir="$pc_root/data-a" \
+		> "$pc_root/without-no-defaults.log" 2>&1
+	without_status=$?
+	check 'without --no-defaults, an ambient user=mysql option file breaks initialization' "$without_status" 1
+
+	HOME="$pc_root" "$install_script" --no-defaults --basedir="$basedir" --datadir="$pc_root/data-b" \
+		> "$pc_root/with-no-defaults.log" 2>&1
+	with_status=$?
+	check 'with --no-defaults (the fix), the same option file cannot reach it' "$with_status" 0
+
+	# Exercise tests/database.php's own initialization function directly, under
+	# the same hostile option file, rather than re-deriving the command by hand:
+	# this proves the real fix, not a copy of it.
+	mkdir -p "$pc_root/data-c/data"
+	MCM_TEST_MYSQLD="$MCM_TEST_MYSQLD" HOME="$pc_root" "$(q_php)" -r '
+		require $argv[1] . "/tests/database.php";
+		$binaries = mcm_db_binaries();
+		if ($binaries["problem"] !== "") {
+			fwrite(STDERR, $binaries["problem"] . PHP_EOL);
+			exit(2);
+		}
+		try {
+			mcm_db_initialize($binaries, $argv[2]);
+			exit(0);
+		} catch (Throwable $e) {
+			fwrite(STDERR, $e->getMessage() . PHP_EOL);
+			exit(1);
+		}
+	' "$Q_ROOT" "$pc_root/data-c" \
+		> "$pc_root/with-no-defaults-real.log" 2>&1
+	with_real_status=$?
+	check 'tests/database.php initialization (the real fix) succeeds under the same option file' "$with_real_status" 0
+fi
+
+printf '\n'
+if [ "$fail" -eq 0 ]; then
+	printf 'PASS: the database-coverage regression and its controls all hold\n'
+else
+	printf 'FAIL: the database-coverage regression did not hold - see above\n'
+fi
+exit "$fail"

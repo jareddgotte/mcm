@@ -348,7 +348,14 @@ function mcm_db_boot(array $binaries)
 function mcm_db_initialize(array $binaries, $root)
 {
 	if ($binaries['family'] === 'mariadb') {
+		// Without this the installer reads system option files (parse_arguments
+		// in mysql_install_db.sh), so a host with its own MySQL/MariaDB config -
+		// GitHub's ubuntu-24.04 runner ships one naming "user = mysql" - makes
+		// the installer try to chown the data directory to that user and fail,
+		// exactly as the server start and the MySQL install path already guard
+		// against below.
 		$command = escapeshellarg($binaries['install'])
+			. ' ' . escapeshellarg('--no-defaults')
 			. ' ' . escapeshellarg('--basedir=' . $binaries['basedir'])
 			. ' ' . escapeshellarg('--datadir=' . $root . '/data');
 	} else {
